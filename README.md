@@ -3,68 +3,46 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Gemini Powered](https://img.shields.io/badge/AI-Gemini%202.5-orange.svg)](https://deepmind.google/technologies/gemini/)
-[![Hacker News Target](https://img.shields.io/badge/Target-5000%20Stars-brightgreen.svg)]()
 
-**Unity Performance Alchemist** is an autonomous AI agent designed to bridge the gap between "It works on my machine" and "It runs 60fps on a budget Android." Inspired by Andrej Karpathy's `autoresearch`, it uses a closed-loop evolutionary process to research, refactor, and benchmark C# code across multiple virtual hardware profiles.
+**Unity Performance Alchemist** is a native Unity Editor Extension designed to autonomously optimize your C# scripts. Inspired by Andrej Karpathy's `autoresearch`, it uses a closed-loop evolutionary process: **[Measure -> Refactor -> Verify -> Commit]**.
 
 ---
 
-## 🚀 The Core Vision: Autonomous Performance Engineering
+## 🚀 The Core Advantage: Native & Autonomous
 
-Most performance optimization today is reactive: something is slow, you profile it, you fix it. Alchemist makes it **proactive**.
+Unlike other AI tools that just suggest code, Alchemist **benchmarks** the suggestions in your actual Unity project to prove they are faster.
 
-### 1. The Multi-Device Research Loop
-Alchemist doesn't just optimize for your PC. It researchs code variations against **Virtual Hardware Tiers**:
-- **🌑 Low-End Tier:** Simulates restricted CPU cores and thermal throttling.
-- **🌗 Mid-End Tier:** Standard mobile hardware constraints.
-- **☀️ High-End Tier:** Maximum visual fidelity and high-refresh rates.
-
-### 2. Architectural Evolution (Not just Parameter Tuning)
-While simple tools change a `float` value, Alchemist's AI Researcher (Gemini 2.5) explores **Structural Hypotheses**:
-- *"What if we replace this `Update()` loop with a **Job System** implementation?"*
-- *"Can we use **Object Pooling** to eliminate this GC spike?"*
-- *"Would a **Struct-based Data Layout** improve cache hits on mobile CPUs?"*
+### 🌌 Key Features
+- **Pure C# Integration:** No Node.js or Python required. Just drop the script into your Unity project.
+- **Autonomous Evolution:** Gemini 2.5 analyzes your profiler data and refactors your code (Object Pooling, Job System, etc.).
+- **Visual Validation:** Automatically toggles Play Mode to measure real-world Frame Time and Memory Allocation.
+- **Auto-Rollback:** If AI-suggested code is slower, Alchemist automatically reverts to the previous best version.
 
 ---
 
 ## ⚙️ How it Works (The Alchemist Loop)
 
-1.  **Hypothesis:** AI analyzes C# code and identifies a potential bottleneck.
-2.  **Experimentation:** AI generates several refactored versions of the code.
-3.  **Cross-Device Benchmarking:** Each version is executed via `unity-cli` under different simulated hardware constraints.
-4.  **Verification:** High-resolution profiler data (Frame time, Draw calls, Memory) is extracted.
-5.  **Commit:** If a version improves performance across ALL tiers, the Agent automatically commits the change to Git.
+1.  **Baseline:** Measures the current script's frame time in Play Mode.
+2.  **Hypothesis:** Gemini proposes a refactored version of the script.
+3.  **Experiment:** Unity applies the code and re-runs the benchmark.
+4.  **Decision:** If FPS improves, the code is saved as the new baseline. Otherwise, it rolls back.
 
 ---
 
 ## 🛠️ Quick Start
 
 ### 1. Installation
-```bash
-git clone https://github.com/mmporong/unity-perf-alchemist.git
-cd unity-perf-alchemist
-npm install
-```
+Simply copy the `Assets/UnityPerformanceAlchemist` folder into your Unity project's `Assets` directory.
 
-### 2. Configure Unity Connector
-- Install the **Unity Connector** in your project to enable CLI control.
-- Ensure your target C# scripts are accessible by the agent.
-
-### 3. Start the Research
-```bash
-node core/index.js --target ./Assets/Scripts/MainLogic.cs --goal "Maximize FPS on Low-End Tier"
-```
-
----
-
-## 🗺️ Roadmap
-- [ ] **Virtual Hardware Sandbox:** Automated throttling of Unity's main thread.
-- [ ] **Hugging Face Visual Judge:** Using Vision models to ensure optimizations don't break visual quality.
-- [ ] **Multi-Platform CI/CD:** Direct integration with AWS Device Farm for real-device validation.
+### 2. Usage
+1.  Open the Alchemist window: **Window > Alchemist > Performance Researcher**.
+2.  Enter your **Gemini API Key**.
+3.  Drag & Drop the **Target C# Script** you want to optimize.
+4.  Set your goal (e.g., "Reduce GC allocations") and click **🚀 Start Autonomous Research**.
 
 ---
 
 ## 🤝 Contributing
-Developed with a focus on **Mechanical Engineering precision** and **Game Engine performance**. We welcome contributions from Technical Artists and Performance Engineers.
+This tool is built for high-performance engineering. We welcome contributions that add support for **Automatic multi-platform benchmarking** and **Shader optimization**.
 
 Developed by [mmporong](https://github.com/mmporong) 🌠
