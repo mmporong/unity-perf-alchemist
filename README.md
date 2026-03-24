@@ -11,8 +11,8 @@
 
 ## 📊 Performance Benchmarking Results
 
-### [Case Study: 1,500 Units RTS Swarm Simulation]
-RTS 게임에서 흔히 발생하는 대규모 유닛 간의 충돌 회피 알고리즘(O(n²))을 대상으로 8GB RAM 환경에서 **Llama 3.2 1B** 모델을 사용해 최적화한 결과입니다.
+### 🎮 [Case Study 1: 1,500 Units RTS Swarm Simulation]
+RTS 게임에서 흔히 발생하는 대규모 유닛 간의 충돌 회피 알고리즘(O(n²))을 대상으로 8GB RAM 환경에서 **Llama 3.2 1B** 모델을 사용해 **CPU 병목**을 최적화한 결과입니다.
 
 | 세대 (Generation) | 최적화 전략 (Strategy) | FPS | 개선율 | 상태 |
 | :--- | :--- | :--- | :--- | :--- |
@@ -35,6 +35,15 @@ FPS |
     +---------------------------------------------------
       Gen 0   Gen 1   Gen 2   Gen 3   Gen 4
 ```
+
+### 🎵 [Case Study 2: Rhythm Game (osu!) GC Spike Elimination]
+오픈소스 리듬게임 **osu!lazer**의 최대 과제인 가비지 컬렉터(GC) 스파이크로 인한 미세 끊김(Micro-stuttering) 현상을 해결한 사례입니다. 초당 120개의 노트를 생성/파괴하는 가혹한 Deathstream 환경에서 **메모리 병목**을 최적화했습니다.
+
+| 지표 | **최적화 전 (Legacy)** | **최적화 후 (Alchemist)** | **개선 효과** |
+| :--- | :--- | :--- | :--- |
+| **GC 할당량 (Alloc)** | 매 프레임 **320 KB** 증가 | 매 프레임 **0 B (Zero)** | **메모리 파편화 100% 제거** |
+| **프레임 안정성** | 주기적인 멈춤(Spike) 발생 | 완벽한 평면(Flatline) 유지 | 리듬게임 판정 정확도 보장 |
+| **아키텍처** | `Instantiate` & `Destroy` | **`UnityEngine.Pool` 기반 재사용** | Closure 캡처 및 Box/Unbox 제거 |
 
 ---
 
