@@ -7,18 +7,21 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         body { font-family: 'Segoe UI', sans-serif; background: #121212; color: #e0e0e0; margin: 0; padding: 20px; }
-        .container { max-width: 1200px; margin: 0 auto; display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .container { max-width: 1400px; margin: 0 auto; display: grid; grid-template-columns: 1fr 1.5fr; gap: 20px; }
         .header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #333; padding-bottom: 10px; }
-        .card { background: #1e1e1e; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .card { background: #1e1e1e; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); margin-bottom: 20px; }
         .metric-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
         .metric { text-align: center; padding: 10px; border-radius: 5px; background: #2a2a2a; }
         .metric h3 { font-size: 14px; margin: 0; color: #aaa; }
         .metric p { font-size: 24px; font-weight: bold; margin: 5px 0; color: #4caf50; }
-        .history { max-height: 400px; overflow-y: auto; }
-        .history-item { padding: 10px; border-bottom: 1px solid #333; font-size: 13px; display: flex; align-items: center; }
-        .history-item.accepted { border-left: 4px solid #4caf50; background: rgba(76, 175, 80, 0.1); }
-        .history-item.rejected { border-left: 4px solid #f44336; background: rgba(244, 67, 54, 0.1); }
+        .history { max-height: 500px; overflow-y: auto; }
+        .history-item { padding: 10px; border-bottom: 1px solid #333; font-size: 13px; display: flex; align-items: center; cursor: pointer; transition: background 0.2s; }
+        .history-item:hover { background: #333; }
+        .history-item.accepted { border-left: 4px solid #4caf50; background: rgba(76, 175, 80, 0.05); }
+        .history-item.rejected { border-left: 4px solid #f44336; background: rgba(244, 67, 54, 0.05); }
+        .code-viewer { background: #0d0d0d; color: #d4d4d4; padding: 15px; border-radius: 5px; font-family: 'Consolas', monospace; font-size: 12px; white-space: pre-wrap; height: 600px; overflow-y: auto; border: 1px solid #444; }
         .status-badge { display: inline-block; padding: 5px 10px; border-radius: 20px; font-size: 12px; background: #444; }
+        .tag { font-size: 10px; padding: 20px 8px; border-radius: 3px; background: #444; margin-left: 10px; }
     </style>
 </head>
 <body>
@@ -28,25 +31,36 @@
     </div>
 
     <div class="container">
-        <!-- 메인 그래프 및 수치 -->
-        <div class="card">
-            <div class="metric-grid">
-                <div class="metric"><h3>Initial FPS</h3><p id="initialFPS">0.0</p></div>
-                <div class="metric"><h3>Best FPS</h3><p id="bestFPS">0.0</p></div>
-                <div class="metric"><h3>Improvement</h3><p id="improvement">+0.0%</p></div>
+        <!-- 왼쪽: 메트릭 및 히스토리 -->
+        <div class="left-panel">
+            <div class="card">
+                <div class="metric-grid">
+                    <div class="metric"><h3>Initial FPS</h3><p id="initialFPS">0.0</p></div>
+                    <div class="metric"><h3>Best FPS</h3><p id="bestFPS">0.0</p></div>
+                    <div class="metric"><h3>Improvement</h3><p id="improvement">+0.0%</p></div>
+                </div>
+                <canvas id="fpsChart" height="150"></canvas>
             </div>
-            <canvas id="fpsChart"></canvas>
+            <div class="card">
+                <h3>📜 Research History (Click to view code)</h3>
+                <div id="history" class="history"></div>
+            </div>
         </div>
 
-        <!-- 실시간 가설 및 로그 -->
-        <div class="card">
-            <h3>📜 Hypotheses & Log</h3>
-            <div id="history" class="history"></div>
+        <!-- 오른쪽: 코드 뷰어 -->
+        <div class="right-panel">
+            <div class="card">
+                <h3>🔍 Optimized Code View <span id="viewGen" class="tag">Gen 0</span></h3>
+                <div id="codeViewer" class="code-viewer">// Select a generation from history to see the code...</div>
+            </div>
         </div>
     </div>
 
     <script>
         let fpsChart;
+        let lastHistoryCount = 0;
+        let fullHistory = [];
+
         async function updateDashboard() {
             try {
                 const response = await fetch('/api/data');
@@ -57,26 +71,50 @@
                 document.getElementById('improvement').innerText = `+${data.improvement.toFixed(1)}%`;
                 document.getElementById('status').innerText = `📡 Last Update: ${data.lastUpdate || "Wait..."}`;
 
-                // 로그 업데이트
-                const historyDiv = document.getElementById('history');
-                historyDiv.innerHTML = data.history.map(item => `
-                    <div class="history-item ${item.isAccepted ? 'accepted' : 'rejected'}">
-                        <strong style="width: 50px">Gen ${item.generation}</strong>
-                        <span style="width: 80px; font-weight: bold; color: ${item.isAccepted ? '#4caf50' : '#f44336'}">${item.fps.toFixed(1)} FPS</span>
-                        <span>${item.strategy}</span>
-                    </div>
-                `).reverse().join('');
+                if (data.history && data.history.length !== lastHistoryCount) {
+                    fullHistory = data.history;
+                    lastHistoryCount = data.history.length;
+                    
+                    const historyDiv = document.getElementById('history');
+                    historyDiv.innerHTML = data.history.map((item, index) => `
+                        <div class="history-item ${item.isAccepted ? 'accepted' : 'rejected'}" onclick="viewCode(${index})">
+                            <strong style="width: 50px">Gen ${item.generation}</strong>
+                            <span style="width: 80px; font-weight: bold; color: ${item.isAccepted ? '#4caf50' : '#f44336'}">${item.fps.toFixed(1)} FPS</span>
+                            <span style="flex-grow: 1">${item.strategy}</span>
+                            <span>${item.isAccepted ? '✅' : '❌'}</span>
+                        </div>
+                    `).reverse().join('');
 
-                // 차트 업데이트
-                updateChart(data.history);
+                    updateChart(data.history);
+                    // 최신 코드를 기본으로 보여줌
+                    viewCode(data.history.length - 1);
+                }
             } catch (e) {
                 console.error("Dashboard Update Failed", e);
             }
         }
 
+        function viewCode(index) {
+            const item = fullHistory[index];
+            if (!item) return;
+            
+            document.getElementById('viewGen').innerText = `Gen ${item.generation}`;
+            const viewer = document.getElementById('codeViewer');
+            
+            // HTML Escape
+            let safeCode = item.code
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#039;");
+                
+            viewer.innerHTML = safeCode;
+        }
+
         function updateChart(history) {
             const ctx = document.getElementById('fpsChart').getContext('2d');
-            const labels = history.map(h => `Gen ${h.generation}`);
+            const labels = history.map(h => `G${h.generation}`);
             const data = history.map(h => h.fps);
             const colors = history.map(h => h.isAccepted ? '#4caf50' : '#f44336');
 
@@ -86,21 +124,27 @@
                 data: {
                     labels: labels,
                     datasets: [{
-                        label: 'Performance (FPS)',
+                        label: 'FPS',
                         data: data,
                         borderColor: '#4caf50',
-                        segment: {
-                            borderColor: ctx => colors[ctx.p1DataIndex] || '#4caf50'
-                        },
-                        tension: 0.1,
-                        fill: false
+                        backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                        pointBackgroundColor: colors,
+                        tension: 0.3,
+                        fill: true
                     }]
                 },
-                options: { scales: { y: { beginAtZero: false, grid: { color: '#333' } } }, plugins: { legend: { display: false } } }
+                options: { 
+                    responsive: true,
+                    scales: { 
+                        y: { beginAtZero: false, grid: { color: '#333' } },
+                        x: { grid: { display: false } }
+                    }, 
+                    plugins: { legend: { display: false } } 
+                }
             });
         }
 
-        setInterval(updateDashboard, 1000);
+        setInterval(updateDashboard, 1500);
     </script>
 </body>
 </html>
