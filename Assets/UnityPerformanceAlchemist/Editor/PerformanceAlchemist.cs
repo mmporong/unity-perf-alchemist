@@ -24,18 +24,19 @@ namespace UnityPerformanceAlchemist.Editor
         private bool isRunning = false;
         
         // --- AutoResearch Metrics ---
+        [System.Serializable]
         private class GenData
         {
             public int generation;
             public float fps;
             public string strategy;
             public bool isAccepted;
+            public string code; // 리팩토링된 코드 전문
         }
         private List<GenData> researchHistory = new List<GenData>();
         private float initialFPS = 0;
         private float bestFPS = 0;
         private string bestCode = "";
-        private string currentLog = "";
 
         [MenuItem("Window/Alchemist/Performance Researcher")]
         public static void ShowWindow()
@@ -141,10 +142,8 @@ namespace UnityPerformanceAlchemist.Editor
                     Handles.color = researchHistory[i+1].isAccepted ? Color.green : Color.red;
                     Handles.DrawLine(start, end);
                     
-                    // 점 그리기
                     EditorGUI.DrawRect(new Rect(start.x - 2, start.y - 2, 4, 4), Color.white);
                 }
-                // 마지막 점
                 Vector2 lastPoint = new Vector2(
                     graphRect.x + graphRect.width,
                     graphRect.y + graphRect.height - (researchHistory.Last().fps / maxFPS * graphRect.height)
@@ -191,33 +190,29 @@ namespace UnityPerformanceAlchemist.Editor
             researchHistory.Clear();
             bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript));
             
-            // --- Step 0: Base Measurement ---
             float baseFPS = await RunBenchmark();
             initialFPS = baseFPS;
             bestFPS = baseFPS;
-            researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true });
+            researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true, code = bestCode });
+            await SyncToWeb();
 
             for (int gen = 1; gen <= 10; gen++)
             {
                 if (!isRunning) break;
 
-                // 1. AI에게 가설 및 코드 요청
                 Log($"[Gen {gen}] AI 가설 수립 중...");
                 var (strategy, newCode) = await RequestHypothesis(bestCode, bestFPS);
                 
                 if (string.IsNullOrEmpty(newCode)) continue;
 
-                // 2. 실험: 코드 적용
                 File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), newCode);
                 AssetDatabase.Refresh();
-                await Task.Delay(5000); // 컴파일 대기
+                await Task.Delay(5000); 
 
-                // 3. 검증: 성능 측정
                 Log($"[Gen {gen}] 성능 검증 중 (Benchmark)...");
                 float testFPS = await RunBenchmark();
                 
-                // 4. 의사결정 (Research Logic)
-                bool accepted = testFPS > bestFPS + 0.5f; // 오차 범위 고려 0.5 FPS 이상 향상 시 인정
+                bool accepted = testFPS > bestFPS + 0.5f; 
                 if (accepted)
                 {
                     Log($"[Gen {gen}] ✨ 가설 채택! 성능 향상 확인: {bestFPS:F1} → {testFPS:F1} FPS");
@@ -232,8 +227,8 @@ namespace UnityPerformanceAlchemist.Editor
                     await Task.Delay(3000);
                 }
 
-                researchHistory.Add(new GenData { generation = gen, fps = testFPS, strategy = strategy, isAccepted = accepted });
-                await SyncToWeb(); // 웹 대시보드와 동기화
+                researchHistory.Add(new GenData { generation = gen, fps = testFPS, strategy = strategy, isAccepted = accepted, code = (accepted ? newCode : "Rejected. Rolled back to previous best.") });
+                await SyncToWeb(); 
             }
 
             isRunning = false;
@@ -271,7 +266,7 @@ namespace UnityPerformanceAlchemist.Editor
         private async Task<float> RunBenchmark()
         {
             EditorApplication.isPlaying = true;
-            await Task.Delay(2000); // 웜업
+            await Task.Delay(2000); 
 
             float totalDelta = 0;
             int frames = 60;
@@ -297,8 +292,6 @@ namespace UnityPerformanceAlchemist.Editor
 
             try
             {
-                // 간단한 JSON 파싱 (실제로는 더 견고한 파서 필요)
-                // Gemini/Ollama 응답에서 ```json 내의 텍스트만 추출
                 string cleanJson = responseJson;
                 if (cleanJson.Contains("```json"))
                 {
@@ -307,8 +300,6 @@ namespace UnityPerformanceAlchemist.Editor
                     cleanJson = cleanJson.Substring(start, end - start).Trim();
                 }
 
-                // Newtonsoft 없이 간단히 추출하거나, 사용자 프로젝트에 Newtonsoft가 있다고 가정
-                // 여기서는 유니티 기본 기능인 JsonUtility가 dynamic을 지원하지 않으므로 문자열 파싱 시도
                 string strategy = "Optimization Step";
                 string code = currentCode;
 
@@ -355,12 +346,10 @@ namespace UnityPerformanceAlchemist.Editor
                 {
                     string text = request.downloadHandler.text;
                     if (isGemini) {
-                        // Gemini 특유의 응답 구조에서 텍스트만 추출
                         int start = text.IndexOf("\"text\": \"") + 9;
                         int end = text.IndexOf("\"", start);
                         return text.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
                     } else {
-                        // Ollama (OpenAI 호환)
                         int start = text.IndexOf("\"content\":\"") + 11;
                         int end = text.IndexOf("\"", start);
                         return text.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
