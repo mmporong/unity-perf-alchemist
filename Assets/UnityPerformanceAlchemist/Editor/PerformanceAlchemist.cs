@@ -31,7 +31,7 @@ namespace UnityPerformanceAlchemist.Editor
             public float fps;
             public string strategy;
             public bool isAccepted;
-            public string code; // 리팩토링된 코드 전문
+            public string code; 
         }
         private List<GenData> researchHistory = new List<GenData>();
         private float initialFPS = 0;
@@ -205,13 +205,27 @@ namespace UnityPerformanceAlchemist.Editor
                 
                 if (string.IsNullOrEmpty(newCode)) continue;
 
+                // 실험: 코드 적용
                 File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), newCode);
                 AssetDatabase.Refresh();
+                
+                // --- [Safety Check] 컴파일 오류 감지 ---
                 await Task.Delay(5000); 
+                if (EditorUtility.scriptCompilationFailed)
+                {
+                    Log($"[Gen {gen}] ⚠️ 컴파일 에러! 즉시 롤백합니다.");
+                    File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), bestCode);
+                    AssetDatabase.Refresh();
+                    await Task.Delay(3000);
+                    researchHistory.Add(new GenData { generation = gen, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false, code = "REJECTED_COMPILE_ERROR" });
+                    await SyncToWeb();
+                    continue;
+                }
 
                 Log($"[Gen {gen}] 성능 검증 중 (Benchmark)...");
                 float testFPS = await RunBenchmark();
                 
+                // 의사결정
                 bool accepted = testFPS > bestFPS + 0.5f; 
                 if (accepted)
                 {
@@ -265,19 +279,30 @@ namespace UnityPerformanceAlchemist.Editor
 
         private async Task<float> RunBenchmark()
         {
+            Log("⏯️ Running Benchmark (Watchdog Enabled)...");
             EditorApplication.isPlaying = true;
+            
+            float startTime = (float)EditorApplication.timeSinceStartup;
+            float timeout = 15f; // 15초 타임아웃 (무한 루프 방지)
+
             await Task.Delay(2000); 
 
             float totalDelta = 0;
             int frames = 60;
             for (int i = 0; i < frames; i++)
             {
+                if ((float)EditorApplication.timeSinceStartup - startTime > timeout)
+                {
+                    Debug.LogError("[Alchemist] Benchmark Timeout! Rolling back.");
+                    EditorApplication.isPlaying = false;
+                    return 0.1f;
+                }
                 totalDelta += Time.smoothDeltaTime;
                 await Task.Yield();
             }
 
             EditorApplication.isPlaying = false;
-            return frames / totalDelta;
+            return frames / (totalDelta > 0 ? totalDelta : 1f);
         }
 
         private async Task<(string strategy, string code)> RequestHypothesis(string currentCode, float currentFPS)
