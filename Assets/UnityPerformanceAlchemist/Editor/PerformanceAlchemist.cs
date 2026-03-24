@@ -6,115 +6,272 @@ using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace UnityPerformanceAlchemist.Editor
 {
     public class PerformanceAlchemistWindow : EditorWindow
     {
+        private enum LLMProvider { Gemini, Ollama_Local }
+        private LLMProvider selectedProvider = LLMProvider.Ollama_Local;
+        
         private string apiKey = "";
+        private string localEndpoint = "http://localhost:11434/v1/chat/completions";
+        private string localModel = "llama3.2:1b";
+        
         private MonoScript targetScript;
         private string optimizationGoal = "Maximize FPS on Mobile Hardware";
         private bool isRunning = false;
-        private string logOutput = "Ready to start research loop...";
         
-        private float bestFrameTime = float.MaxValue;
+        // --- AutoResearch Metrics ---
+        private class GenData
+        {
+            public int generation;
+            public float fps;
+            public string strategy;
+            public bool isAccepted;
+        }
+        private List<GenData> researchHistory = new List<GenData>();
+        private float initialFPS = 0;
+        private float bestFPS = 0;
         private string bestCode = "";
+        private string currentLog = "";
 
         [MenuItem("Window/Alchemist/Performance Researcher")]
         public static void ShowWindow()
         {
-            GetWindow<PerformanceAlchemistWindow>("Alchemist 🧪");
+            var window = GetWindow<PerformanceAlchemistWindow>("Alchemist Dashboard 🧪");
+            window.minSize = new Vector2(500, 600);
         }
 
         private void OnEnable()
         {
             apiKey = EditorPrefs.GetString("Alchemist_API_Key", "");
+            localEndpoint = EditorPrefs.GetString("Alchemist_Local_Endpoint", "http://localhost:11434/v1/chat/completions");
         }
 
         private void OnGUI()
         {
-            GUILayout.Label("Unity Performance Alchemist", EditorStyles.boldLabel);
-            EditorGUILayout.Space();
+            DrawHeader();
+            
+            EditorGUILayout.BeginHorizontal();
+            DrawSettings();
+            DrawPerformanceGraph();
+            EditorGUILayout.EndHorizontal();
 
-            apiKey = EditorGUILayout.PasswordField("Gemini API Key", apiKey);
-            if (GUI.changed) EditorPrefs.SetString("Alchemist_API_Key", apiKey);
-
-            targetScript = (MonoScript)EditorGUILayout.ObjectField("Target C# Script", targetScript, typeof(MonoScript), false);
-            optimizationGoal = EditorGUILayout.TextField("Optimization Goal", optimizationGoal);
-
-            EditorGUILayout.Space();
-
-            if (GUILayout.Button(isRunning ? "🛑 Stop Research" : "🚀 Start Autonomous Research", GUILayout.Height(40)))
-            {
-                if (isRunning) isRunning = false;
-                else StartResearch();
-            }
-
-            EditorGUILayout.Space();
-            GUILayout.Label("Research Logs:", EditorStyles.miniLabel);
-            EditorGUILayout.TextArea(logOutput, GUILayout.ExpandHeight(true));
+            DrawResearchHistory();
+            
+            if (isRunning) Repaint();
         }
 
-        private async void StartResearch()
+        private void DrawHeader()
         {
-            if (targetScript == null || string.IsNullOrEmpty(apiKey))
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            var headerStyle = new GUIStyle(EditorStyles.boldLabel) { fontSize = 18, alignment = TextAnchor.MiddleCenter };
+            GUILayout.Label("⚛️ AutoResearch Autonomous Engine", headerStyle);
+            
+            if (bestFPS > 0)
             {
-                Debug.LogError("[Alchemist] Target Script or API Key is missing!");
-                return;
+                float improvement = ((bestFPS - initialFPS) / initialFPS) * 100f;
+                var subHeaderStyle = new GUIStyle(EditorStyles.label) { fontSize = 14, alignment = TextAnchor.MiddleCenter, fontStyle = FontStyle.Italic };
+                string color = improvement > 0 ? "green" : "white";
+                GUILayout.Label($"Current Improvement: <color={color}>+{improvement:F1}%</color> (Base: {initialFPS:F1} → Best: {bestFPS:F1} FPS)", new GUIStyle(subHeaderStyle) { richText = true });
+            }
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawSettings()
+        {
+            EditorGUILayout.BeginVertical(GUILayout.Width(250));
+            GUILayout.Label("🛠️ Configuration", EditorStyles.boldLabel);
+            
+            selectedProvider = (LLMProvider)EditorGUILayout.EnumPopup("LLM Provider", selectedProvider);
+
+            if (selectedProvider == LLMProvider.Gemini)
+            {
+                apiKey = EditorGUILayout.PasswordField("Gemini API Key", apiKey);
+                if (GUI.changed) EditorPrefs.SetString("Alchemist_API_Key", apiKey);
+            }
+            else
+            {
+                localEndpoint = EditorGUILayout.TextField("Ollama Endpoint", localEndpoint);
+                localModel = EditorGUILayout.TextField("Model Name", localModel);
+                if (GUI.changed) EditorPrefs.SetString("Alchemist_Local_Endpoint", localEndpoint);
             }
 
-            isRunning = true;
-            bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript));
-            bestFrameTime = float.MaxValue;
+            targetScript = (MonoScript)EditorGUILayout.ObjectField("Target Script", targetScript, typeof(MonoScript), false);
+            optimizationGoal = EditorGUILayout.TextField("Goal", optimizationGoal);
 
-            Log("🔍 Research Loop Started...");
+            EditorGUILayout.Space();
+
+            GUI.backgroundColor = isRunning ? Color.red : Color.green;
+            if (GUILayout.Button(isRunning ? "🛑 STOP RESEARCH" : "🚀 START AUTORESEARCH", GUILayout.Height(40)))
+            {
+                if (isRunning) isRunning = false;
+                else StartResearchLoop();
+            }
+            GUI.backgroundColor = Color.white;
+            
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawPerformanceGraph()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            GUILayout.Label("📈 Performance Trend (FPS)", EditorStyles.boldLabel);
+            
+            Rect graphRect = GUILayoutUtility.GetRect(200, 150);
+            EditorGUI.DrawRect(graphRect, new Color(0.15f, 0.15f, 0.15f));
+
+            if (researchHistory.Count > 1)
+            {
+                float maxFPS = researchHistory.Max(h => h.fps) * 1.2f;
+                if (maxFPS < 60) maxFPS = 60;
+
+                for (int i = 0; i < researchHistory.Count - 1; i++)
+                {
+                    Vector2 start = new Vector2(
+                        graphRect.x + (i * (graphRect.width / (researchHistory.Count - 1))),
+                        graphRect.y + graphRect.height - (researchHistory[i].fps / maxFPS * graphRect.height)
+                    );
+                    Vector2 end = new Vector2(
+                        graphRect.x + ((i + 1) * (graphRect.width / (researchHistory.Count - 1))),
+                        graphRect.y + graphRect.height - (researchHistory[i + 1].fps / maxFPS * graphRect.height)
+                    );
+                    Handles.color = researchHistory[i+1].isAccepted ? Color.green : Color.red;
+                    Handles.DrawLine(start, end);
+                    
+                    // 점 그리기
+                    EditorGUI.DrawRect(new Rect(start.x - 2, start.y - 2, 4, 4), Color.white);
+                }
+                // 마지막 점
+                Vector2 lastPoint = new Vector2(
+                    graphRect.x + graphRect.width,
+                    graphRect.y + graphRect.height - (researchHistory.Last().fps / maxFPS * graphRect.height)
+                );
+                EditorGUI.DrawRect(new Rect(lastPoint.x - 2, lastPoint.y - 2, 4, 4), Color.white);
+            }
+            else
+            {
+                GUI.Label(graphRect, "Not enough data to draw graph...", new GUIStyle { alignment = TextAnchor.MiddleCenter, normal = { textColor = Color.gray } });
+            }
+            
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawResearchHistory()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            GUILayout.Label("📜 Research Change Log & Hypotheses", EditorStyles.boldLabel);
+            
+            scrollPos = EditorGUILayout.BeginScrollView(scrollPos);
+            foreach (var data in researchHistory)
+            {
+                EditorGUILayout.BeginHorizontal(EditorStyles.textArea);
+                string statusIcon = data.isAccepted ? "✅" : "❌";
+                string color = data.isAccepted ? "green" : "gray";
+                
+                GUILayout.Label($"Gen {data.generation}", GUILayout.Width(50));
+                GUILayout.Label($"{statusIcon}", GUILayout.Width(20));
+                GUILayout.Label($"<color={color}>{data.fps:F1} FPS</color>", new GUIStyle(EditorStyles.label) { richText = true, fontStyle = FontStyle.Bold }, GUILayout.Width(80));
+                GUILayout.Label($"{data.strategy}", EditorStyles.wordWrappedLabel);
+                EditorGUILayout.EndHorizontal();
+            }
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+        }
+
+        private Vector2 scrollPos;
+
+        private async void StartResearchLoop()
+        {
+            if (targetScript == null) { Debug.LogError("Target script missing!"); return; }
+
+            isRunning = true;
+            researchHistory.Clear();
+            bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript));
+            
+            // --- Step 0: Base Measurement ---
+            float baseFPS = await RunBenchmark();
+            initialFPS = baseFPS;
+            bestFPS = baseFPS;
+            researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true });
 
             for (int gen = 1; gen <= 10; gen++)
             {
                 if (!isRunning) break;
-                Log($"\n--- Generation {gen} ---");
 
-                // 1. Benchmark current version
-                float currentFPS = await RunBenchmark();
-                float currentFrameTime = 1000f / currentFPS;
-                Log($"📊 Current Perf: {currentFrameTime:F2}ms ({currentFPS:F1} FPS)");
+                // 1. AI에게 가설 및 코드 요청
+                Log($"[Gen {gen}] AI 가설 수립 중...");
+                var (strategy, newCode) = await RequestHypothesis(bestCode, bestFPS);
+                
+                if (string.IsNullOrEmpty(newCode)) continue;
 
-                if (currentFrameTime < bestFrameTime)
+                // 2. 실험: 코드 적용
+                File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), newCode);
+                AssetDatabase.Refresh();
+                await Task.Delay(5000); // 컴파일 대기
+
+                // 3. 검증: 성능 측정
+                Log($"[Gen {gen}] 성능 검증 중 (Benchmark)...");
+                float testFPS = await RunBenchmark();
+                
+                // 4. 의사결정 (Research Logic)
+                bool accepted = testFPS > bestFPS + 0.5f; // 오차 범위 고려 0.5 FPS 이상 향상 시 인정
+                if (accepted)
                 {
-                    Log("✨ Improvement Found! Saving as baseline.");
-                    bestFrameTime = currentFrameTime;
-                    bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript));
+                    Log($"[Gen {gen}] ✨ 가설 채택! 성능 향상 확인: {bestFPS:F1} → {testFPS:F1} FPS");
+                    bestFPS = testFPS;
+                    bestCode = newCode;
                 }
                 else
                 {
-                    Log("📉 Regression. Rolling back to stable code.");
+                    Log($"[Gen {gen}] ❌ 가설 기각. 성능 저하 또는 정체: {testFPS:F1} FPS. 롤백합니다.");
                     File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), bestCode);
                     AssetDatabase.Refresh();
-                    await Task.Delay(2000); // Wait for compilation
+                    await Task.Delay(3000);
                 }
 
-                // 2. Consult AI for next hypothesis
-                Log("🧠 Consulting Gemini for architectural refactor...");
-                string newCode = await RequestGeminiRefactor(bestCode, bestFrameTime);
-                
-                if (!string.IsNullOrEmpty(newCode))
-                {
-                    File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), newCode);
-                    AssetDatabase.Refresh();
-                    Log("📝 Applied AI-proposed refactor. Waiting for compilation...");
-                    await Task.Delay(5000); // Wait for Unity to compile
-                }
+                researchHistory.Add(new GenData { generation = gen, fps = testFPS, strategy = strategy, isAccepted = accepted });
+                await SyncToWeb(); // 웹 대시보드와 동기화
             }
 
             isRunning = false;
-            Log("\n🏁 Research Loop Finished.");
+            await SyncToWeb();
+            Log("🏁 Research Loop Finished.");
+        }
+
+        private async Task SyncToWeb()
+        {
+            string url = "http://localhost:3848/api/update";
+            float improvement = initialFPS > 0 ? ((bestFPS - initialFPS) / initialFPS) * 100f : 0;
+            
+            var payload = new
+            {
+                initialFPS = initialFPS,
+                bestFPS = bestFPS,
+                improvement = improvement,
+                history = researchHistory,
+                status = isRunning ? "Running" : "Finished"
+            };
+
+            string json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+            using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
+            {
+                byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+                request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+                request.downloadHandler = new DownloadHandlerBuffer();
+                request.SetRequestHeader("Content-Type", "application/json");
+
+                var operation = request.SendWebRequest();
+                while (!operation.isDone) await Task.Yield();
+            }
         }
 
         private async Task<float> RunBenchmark()
         {
-            Log("⏯️ Running Benchmark...");
             EditorApplication.isPlaying = true;
-            await Task.Delay(2000); // Warm up
+            await Task.Delay(2000); // 웜업
 
             float totalDelta = 0;
             int frames = 60;
@@ -128,26 +285,65 @@ namespace UnityPerformanceAlchemist.Editor
             return frames / totalDelta;
         }
 
-        private async Task<string> RequestGeminiRefactor(string code, float frameTime)
+        private async Task<(string strategy, string code)> RequestHypothesis(string currentCode, float currentFPS)
         {
-            string url = $"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}";
-            
-            var payload = new
-            {
-                contents = new[] {
-                    new {
-                        role = "user",
-                        parts = new[] {
-                            new { text = $"Unity Performance Task: {optimizationGoal}\nCurrent code runs at {frameTime:F2}ms frame time.\nRefactor this code for better performance (use Job System, Burst, or Pooling if applicable).\nONLY output raw C# code.\n\nCode:\n{code}" }
-                        }
-                    }
-                }
-            };
+            string prompt = $"Unity Performance Alchemist Mission:\nGoal: {optimizationGoal}\nCurrent FPS: {currentFPS:F1}\n\nTask:\nAnalyze the following C# code and propose ONE specific architectural optimization.\nProvide your response in JSON format:\n{{\n  \"strategy\": \"Short description of what you are changing\",\n  \"code\": \"Full refactored C# code\"\n}}\n\nCode:\n{currentCode}";
 
-            string json = EditorJsonUtility.ToJson(payload);
+            string responseJson = "";
+            if (selectedProvider == LLMProvider.Gemini)
+                responseJson = await PostToAI($"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}", prompt, true);
+            else
+                responseJson = await PostToAI(localEndpoint, prompt, false);
+
+            try
+            {
+                // 간단한 JSON 파싱 (실제로는 더 견고한 파서 필요)
+                // Gemini/Ollama 응답에서 ```json 내의 텍스트만 추출
+                string cleanJson = responseJson;
+                if (cleanJson.Contains("```json"))
+                {
+                    int start = cleanJson.IndexOf("```json") + 7;
+                    int end = cleanJson.LastIndexOf("```");
+                    cleanJson = cleanJson.Substring(start, end - start).Trim();
+                }
+
+                // Newtonsoft 없이 간단히 추출하거나, 사용자 프로젝트에 Newtonsoft가 있다고 가정
+                // 여기서는 유니티 기본 기능인 JsonUtility가 dynamic을 지원하지 않으므로 문자열 파싱 시도
+                string strategy = "Optimization Step";
+                string code = currentCode;
+
+                if (cleanJson.Contains("\"strategy\":")) {
+                    int sStart = cleanJson.IndexOf("\"strategy\":") + 12;
+                    int sEnd = cleanJson.IndexOf("\"", sStart);
+                    strategy = cleanJson.Substring(sStart, sEnd - sStart);
+                }
+                
+                if (cleanJson.Contains("\"code\":")) {
+                    int cStart = cleanJson.IndexOf("\"code\":") + 8;
+                    int cEnd = cleanJson.LastIndexOf("\"");
+                    code = cleanJson.Substring(cStart, cEnd - cStart).Replace("\\n", "\n").Replace("\\\"", "\"").Replace("\\t", "\t");
+                }
+
+                return (strategy, code);
+            }
+            catch
+            {
+                return ("AI Proposal Failed", currentCode);
+            }
+        }
+
+        private async Task<string> PostToAI(string url, string prompt, bool isGemini)
+        {
+            string payload = "";
+            if (isGemini) {
+                payload = $"{{\"contents\":[{{\"parts\":[{{\"text\":\"{prompt.Replace("\"", "\\\"").Replace("\n", "\\n")}\"}}]}}]}}";
+            } else {
+                payload = $"{{\"model\":\"{localModel}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{prompt.Replace("\"", "\\\"").Replace("\n", "\\n")}\"}}],\"stream\":false}}";
+            }
+
             using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
             {
-                byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
+                byte[] bodyRaw = Encoding.UTF8.GetBytes(payload);
                 request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json");
@@ -157,31 +353,23 @@ namespace UnityPerformanceAlchemist.Editor
 
                 if (request.result == UnityWebRequest.Result.Success)
                 {
-                    // Basic parsing of Gemini response (In a production tool, use a proper JSON parser)
-                    string responseText = request.downloadHandler.text;
-                    int start = responseText.IndexOf("```csharp") + 9;
-                    if (start < 9) start = responseText.IndexOf("```") + 3;
-                    int end = responseText.LastIndexOf("```");
-                    
-                    if (start > 8 && end > start)
-                    {
-                        return responseText.Substring(start, end - start).Trim();
+                    string text = request.downloadHandler.text;
+                    if (isGemini) {
+                        // Gemini 특유의 응답 구조에서 텍스트만 추출
+                        int start = text.IndexOf("\"text\": \"") + 9;
+                        int end = text.IndexOf("\"", start);
+                        return text.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
+                    } else {
+                        // Ollama (OpenAI 호환)
+                        int start = text.IndexOf("\"content\":\"") + 11;
+                        int end = text.IndexOf("\"", start);
+                        return text.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
                     }
-                    return responseText; // Fallback
                 }
-                else
-                {
-                    Debug.LogError($"[Alchemist] API Error: {request.error}");
-                    return null;
-                }
+                return "";
             }
         }
 
-        private void Log(string msg)
-        {
-            logOutput += "\n" + msg;
-            Debug.Log("[Alchemist] " + msg);
-            Repaint();
-        }
+        private void Log(string msg) { Debug.Log("[Alchemist] " + msg); }
     }
 }
