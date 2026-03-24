@@ -56,9 +56,24 @@ Alloc |
   0 B |            \--- [Gen 3 & 4: Zero-Allocation Achievement]
 ```
 
----
+### 🌶️ [Case Study 3: UGUI Canvas Rebuild Spike (Spicy Level)]
+현업 시니어 개발자들이 가장 골머리를 앓는 **대규모 UI 렌더링 병목(Canvas.SendWillRenderCanvases)** 해결 사례입니다. 500개의 아이템이 존재하는 동적 인벤토리에서 무분별한 `LayoutGroup` 중첩과 잦은 업데이트로 인해 발생하는 치명적인 CPU 스파이크를 최적화했습니다.
 
-## ⚛️ The AutoResearch Architecture
+| 세대 (Generation) | 최적화 전략 (Strategy) | Rebuild Time | Draw Calls | 상태 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gen 0** | (Initial) Nested `GridLayoutGroup` + `ContentSizeFitter` | **38.5 ms** | 1,002 | Baseline |
+| **Gen 1** | Disable `raycastTarget` on non-interactive Texts/Images | 35.2 ms | 1,002 | ✅ Accepted |
+| **Gen 2** | Separate dynamic UI into a Sub-Canvas (Canvas Partitioning) | 12.4 ms | 1,005 | ✅ Accepted |
+| **Gen 3** | **Remove LayoutGroups & Implement Virtualization (Recycling)** | **0.8 ms** | **15** | ✅ Accepted |
+| **Gen 4** | Attempt to use IMGUI (`OnGUI`) instead of UGUI | 14.5 ms | 1,000+ | ❌ Rollback |
+
+#### 🔍 Case 3: Core Code & Architecture Evolution
+| **Legacy (Gen 0: Layout Hell)** | **Alchemist (Gen 3: Virtualization)** |
+| :--- | :--- |
+| 수백 개의 UI 객체를 캔버스에 올려두고, 텍스트 하나만 바뀌어도 전체 레이아웃이 멈춰서 재계산되는 구조. | 보이는 UI만 활성화(Recycle)하고, RectTransform을 직접 수학적으로 계산하여 `LayoutGroup`을 완전히 제거. |
+| ```csharp // 최악의 조합 (연쇄 리빌드 유발) obj.AddComponent<GridLayoutGroup>(); obj.AddComponent<ContentSizeFitter>(); text.text = "Update!"; // CPU Spike! ``` | ```csharp // Object Pooling 기반 가상 스크롤 뷰 float yPos = index * itemHeight; item.anchoredPosition = new Vector2(0, yPos); // Canvas.SendWillRenderCanvases 0.1ms ``` |
+
+---
 
 1. **Autonomous Hypothesis**: AI가 프로파일러 데이터를 분석하여 최적화 가설 수립.
 2. **Real-world Validation**: 유니티 플레이 모드를 직접 실행하여 성능 측정.
