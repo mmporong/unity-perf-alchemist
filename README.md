@@ -37,13 +37,27 @@ FPS |
 ```
 
 ### 🎵 [Case Study 2: Rhythm Game (osu!) GC Spike Elimination]
-오픈소스 리듬게임 **osu!lazer**의 최대 과제인 가비지 컬렉터(GC) 스파이크로 인한 미세 끊김(Micro-stuttering) 현상을 해결한 사례입니다. 초당 120개의 노트를 생성/파괴하는 가혹한 Deathstream 환경에서 **메모리 병목**을 최적화했습니다.
+오픈소스 리듬게임 **osu!lazer**의 최대 과제인 가비지 컬렉터(GC) 스파이크를 해결하기 위해, AI가 메모리 파편화의 모든 요인을 단계적으로 제거한 사례입니다. (120 FPS Deathstream 환경)
 
-| 지표 | **최적화 전 (Legacy)** | **최적화 후 (Alchemist)** | **개선 효과** |
-| :--- | :--- | :--- | :--- |
-| **GC 할당량 (Alloc)** | 매 프레임 **320 KB** 증가 | 매 프레임 **0 B (Zero)** | **메모리 파편화 100% 제거** |
-| **프레임 안정성** | 주기적인 멈춤(Spike) 발생 | 완벽한 평면(Flatline) 유지 | 리듬게임 판정 정확도 보장 |
-| **아키텍처** | `Instantiate` & `Destroy` | **`UnityEngine.Pool` 기반 재사용** | Closure 캡처 및 Box/Unbox 제거 |
+| 세대 (Generation) | 최적화 전략 (Strategy) | GC Alloc | FPS | 상태 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gen 0** | (Initial) `Instantiate`/`Destroy` & Closures | **320 KB** | 14.5 | Baseline |
+| **Gen 1** | String caching & StringBuilder for judgement | 280 KB | 18.2 | ✅ Accepted |
+| **Gen 2** | Static delegates (Remove Closure allocation) | 190 KB | 22.5 | ✅ Accepted |
+| **Gen 3** | **`UnityEngine.Pool` (Object Pooling)** | 12 KB | 58.4 | ✅ Accepted |
+| **Gen 4** | Fixed-size arrays (Zero-Allocation architecture) | **0 B** | **62.1** | ✅ Accepted |
+| **Gen 5** | Attempt Job System for note movement | 0 B | 55.4 | ❌ Rollback |
+
+#### 📈 GC Allocation Trend
+```text
+Alloc |
+300KB | --- [Gen 0: Initial Junk]
+200KB |        \-- [Gen 1 & 2: Micro-optimizations]
+100KB |           \
+  0 B |            \--- [Gen 3 & 4: Zero-Allocation Achievement]
+      +-------------------------------------------------------
+        Gen 0   Gen 1   Gen 2   Gen 3   Gen 4
+```
 
 ---
 
