@@ -75,6 +75,30 @@ Alloc |
 
 ---
 
+### 🎆 [Case Study 4: 5K Particle GPU Overdraw (GPU Bound)]
+50개의 독립 ParticleSystem이 각각 **고유 Material**로 100개씩 알파블렌드 파티클을 방출하여, Fill Rate 병목과 Draw Call 폭증을 유발하는 **GPU 병목** 최적화 결과입니다.
+
+| 세대 (Generation) | 최적화 전략 (Strategy) | Draw Calls | GPU Time | 상태 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gen 0** | (Initial) 50 Systems × Unique Materials, No Instancing | **214** | 42.3 ms | Baseline |
+| **Gen 1** | Share single Material across all systems | 86 | 28.1 ms | ✅ Accepted |
+| **Gen 2** | **Enable GPU Instancing** on shared Material | 24 | 8.5 ms | ✅ Accepted |
+| **Gen 3** | **Merge into single system + Custom Vertex Stream + LOD** | **3** | **2.1 ms** | ✅ Accepted |
+| **Gen 4** | Attempt VFX Graph (requires SRP) | N/A | N/A | ❌ Rollback |
+
+#### 📈 Draw Call Trend
+```text
+DC  |
+200 | --- [Gen 0: 50 Unique Materials]
+150 |
+100 |    \-- [Gen 1: Shared Material]
+ 50 |       \
+ 25 |        \-- [Gen 2: GPU Instancing]
+  3 |            \--- [Gen 3: System Merge + LOD]
+```
+
+---
+
 1. **Autonomous Hypothesis**: AI가 프로파일러 데이터를 분석하여 최적화 가설 수립.
 2. **Real-world Validation**: 유니티 플레이 모드를 직접 실행하여 성능 측정.
 3. **Genetic Selection**: 성능 향상 시 채택, 저하 시 즉시 롤백하여 안정성 보장.
@@ -95,6 +119,7 @@ Alloc |
 유니티 상단 메뉴: 
 - **`Window > Alchemist > 1. Setup Swarm Test Scene`** (RTS 최적화 테스트)
 - **`Window > Alchemist > 2. Setup Osu GC Spike Scene`** (리듬게임 최적화 테스트)
+- **`Window > Alchemist > 4. Setup Particle Overdraw Scene`** (GPU 파티클 오버드로 테스트)
 
 ### 2. Run Local AI
 터미널에서 `ollama run llama3.2:1b`를 실행한 후, 유니티 대시보드에서 `Start AutoResearch`를 클릭하세요.
