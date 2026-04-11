@@ -11,91 +11,54 @@
 
 ## 📊 Performance Benchmarking Results
 
+> **⚠️ 실측 예정**: 아래 수치는 실제 벤치마크 실행 후 `Artifacts/benchmark_results.json`으로 자동 기록됩니다.
+> 현재는 샘플 케이스 스터디 구조만 표시합니다.
+
 ### 🎮 [Case Study 1: 1,500 Units RTS Swarm Simulation]
-RTS 게임의 대규모 유닛 충돌 회피 알고리즘(O(n²))을 대상으로 한 **CPU 병목** 최적화 결과입니다.
+RTS 게임의 대규모 유닛 충돌 회피 알고리즘(O(n²))을 대상으로 한 **CPU 병목** 최적화 사례입니다.
 
 | 세대 (Generation) | 최적화 전략 (Strategy) | FPS | 개선율 | 상태 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Gen 0** | (Initial) Legacy O(n²) Brute-force | **12.4** | - | Baseline |
-| **Gen 1** | Use sqrMagnitude instead of Distance | **18.4** | +48% | ✅ Accepted |
-| **Gen 2** | Cache Transform properties locally | **21.2** | +71% | ✅ Accepted |
-| **Gen 3** | **Unity Job System + Burst Compiler** | **64.5** | **+420%** | ✅ Accepted |
-| **Gen 4** | Attempt Spatial Hashing (Grid-based) | **58.2** | - | ❌ Rollback |
-
-#### 📈 FPS Trend
-```text
-FPS |
- 70 |              /--- [Gen 3: Job System + Burst]
- 60 |             /     \
- 50 |            /       X [Gen 4: Rejected & Rolled back]
- 40 |           /
- 30 |          /
- 20 |    /---- [Gen 1 & 2: Micro-optimizations]
- 10 | --- [Gen 0: Baseline]
-```
+| **Gen 0** | (Initial) Legacy O(n²) Brute-force | (실측 예정) | - | Baseline |
+| **Gen 1** | Use sqrMagnitude instead of Distance | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 2** | Cache Transform properties locally | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 3** | Unity Job System + Burst Compiler | (실측 예정) | (실측 예정) | (실측 예정) |
 
 ---
 
-### 🎵 [Case Study 2: Rhythm Game (osu!) GC Spike Elimination]
-리듬게임의 고부하 상황(Deathstream)에서 발생하는 **메모리 병목 및 GC 스파이크** 최적화 결과입니다.
+### 🎵 [Case Study 2: Rhythm Game GC Spike Elimination]
+리듬게임의 고부하 상황에서 발생하는 **메모리 병목 및 GC 스파이크** 최적화 사례입니다.
 
 | 세대 (Generation) | 최적화 전략 (Strategy) | GC Alloc | FPS | 상태 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Gen 0** | (Initial) `Instantiate`/`Destroy` & Closures | **320 KB** | 14.5 | Baseline |
-| **Gen 1** | String caching & StringBuilder for judgement | 280 KB | 18.2 | ✅ Accepted |
-| **Gen 2** | Static delegates (Remove Closure allocation) | 190 KB | 22.5 | ✅ Accepted |
-| **Gen 3** | **`UnityEngine.Pool` (Object Pooling)** | 12 KB | 58.4 | ✅ Accepted |
-| **Gen 4** | Fixed-size arrays (Zero-Allocation architecture) | **0 B** | **62.1** | ✅ Accepted |
-
-#### 📈 GC Allocation Trend
-```text
-Alloc |
-300KB | --- [Gen 0: Initial Junk]
-200KB |        \-- [Gen 1 & 2: Micro-optimizations]
-100KB |           \
-  0 B |            \--- [Gen 3 & 4: Zero-Allocation Achievement]
-```
-
-### 🌶️ [Case Study 3: UGUI Canvas Rebuild Spike (Spicy Level)]
-현업 시니어 개발자들이 가장 골머리를 앓는 **대규모 UI 렌더링 병목(Canvas.SendWillRenderCanvases)** 해결 사례입니다. 500개의 아이템이 존재하는 동적 인벤토리에서 무분별한 `LayoutGroup` 중첩과 잦은 업데이트로 인해 발생하는 치명적인 CPU 스파이크를 최적화했습니다.
-
-| 세대 (Generation) | 최적화 전략 (Strategy) | Rebuild Time | Draw Calls | 상태 |
-| :--- | :--- | :--- | :--- | :--- |
-| **Gen 0** | (Initial) Nested `GridLayoutGroup` + `ContentSizeFitter` | **38.5 ms** | 1,002 | Baseline |
-| **Gen 1** | Disable `raycastTarget` on non-interactive Texts/Images | 35.2 ms | 1,002 | ✅ Accepted |
-| **Gen 2** | Separate dynamic UI into a Sub-Canvas (Canvas Partitioning) | 12.4 ms | 1,005 | ✅ Accepted |
-| **Gen 3** | **Remove LayoutGroups & Implement Virtualization (Recycling)** | **0.8 ms** | **15** | ✅ Accepted |
-| **Gen 4** | Attempt to use IMGUI (`OnGUI`) instead of UGUI | 14.5 ms | 1,000+ | ❌ Rollback |
-
-#### 🔍 Case 3: Core Code & Architecture Evolution
-| **Legacy (Gen 0: Layout Hell)** | **Alchemist (Gen 3: Virtualization)** |
-| :--- | :--- |
-| 수백 개의 UI 객체를 캔버스에 올려두고, 텍스트 하나만 바뀌어도 전체 레이아웃이 멈춰서 재계산되는 구조. | 보이는 UI만 활성화(Recycle)하고, RectTransform을 직접 수학적으로 계산하여 `LayoutGroup`을 완전히 제거. |
-| ```csharp // 최악의 조합 (연쇄 리빌드 유발) obj.AddComponent<GridLayoutGroup>(); obj.AddComponent<ContentSizeFitter>(); text.text = "Update!"; // CPU Spike! ``` | ```csharp // Object Pooling 기반 가상 스크롤 뷰 float yPos = index * itemHeight; item.anchoredPosition = new Vector2(0, yPos); // Canvas.SendWillRenderCanvases 0.1ms ``` |
+| **Gen 0** | (Initial) `Instantiate`/`Destroy` & Closures | (실측 예정) | (실측 예정) | Baseline |
+| **Gen 1** | String caching & StringBuilder | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 2** | Static delegates (Remove Closure allocation) | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 3** | `UnityEngine.Pool` (Object Pooling) | (실측 예정) | (실측 예정) | (실측 예정) |
 
 ---
 
-### 🎆 [Case Study 4: 5K Particle GPU Overdraw (GPU Bound)]
-50개의 독립 ParticleSystem이 각각 **고유 Material**로 100개씩 알파블렌드 파티클을 방출하여, Fill Rate 병목과 Draw Call 폭증을 유발하는 **GPU 병목** 최적화 결과입니다.
+### 🌶️ [Case Study 3: UGUI Canvas Rebuild Spike]
+대규모 UI 렌더링 병목(Canvas.SendWillRenderCanvases) 해결 사례입니다.
+
+| 세대 (Generation) | 최적화 전략 (Strategy) | Rebuild Time | Draw Calls | 상태 |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gen 0** | (Initial) Nested `GridLayoutGroup` + `ContentSizeFitter` | (실측 예정) | (실측 예정) | Baseline |
+| **Gen 1** | Disable `raycastTarget` on non-interactive elements | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 2** | Canvas Partitioning (Sub-Canvas) | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 3** | Remove LayoutGroups + Virtualization | (실측 예정) | (실측 예정) | (실측 예정) |
+
+---
+
+### 🎆 [Case Study 4: 5K Particle GPU Overdraw]
+ParticleSystem Material 중복으로 인한 **GPU 병목** 최적화 사례입니다.
 
 | 세대 (Generation) | 최적화 전략 (Strategy) | Draw Calls | GPU Time | 상태 |
 | :--- | :--- | :--- | :--- | :--- |
-| **Gen 0** | (Initial) 50 Systems × Unique Materials, No Instancing | **214** | 42.3 ms | Baseline |
-| **Gen 1** | Share single Material across all systems | 86 | 28.1 ms | ✅ Accepted |
-| **Gen 2** | **Enable GPU Instancing** on shared Material | 24 | 8.5 ms | ✅ Accepted |
-| **Gen 3** | **Merge into single system + Custom Vertex Stream + LOD** | **3** | **2.1 ms** | ✅ Accepted |
-| **Gen 4** | Attempt VFX Graph (requires SRP) | N/A | N/A | ❌ Rollback |
-
-#### 📈 Draw Call Trend
-```text
-DC  |
-200 | --- [Gen 0: 50 Unique Materials]
-150 |
-100 |    \-- [Gen 1: Shared Material]
- 50 |       \
- 25 |        \-- [Gen 2: GPU Instancing]
-  3 |            \--- [Gen 3: System Merge + LOD]
-```
+| **Gen 0** | (Initial) 50 Systems × Unique Materials | (실측 예정) | (실측 예정) | Baseline |
+| **Gen 1** | Share single Material across all systems | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 2** | Enable GPU Instancing on shared Material | (실측 예정) | (실측 예정) | (실측 예정) |
+| **Gen 3** | Merge into single system + LOD | (실측 예정) | (실측 예정) | (실측 예정) |
 
 ---
 
