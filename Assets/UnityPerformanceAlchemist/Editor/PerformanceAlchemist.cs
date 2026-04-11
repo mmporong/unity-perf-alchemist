@@ -1,12 +1,15 @@
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.Networking;
+using UnityEditor.Compilation;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Linq;
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace UnityPerformanceAlchemist.Editor
 {
@@ -22,7 +25,8 @@ namespace UnityPerformanceAlchemist.Editor
         private MonoScript targetScript;
         private string optimizationGoal = "Maximize FPS on Mobile Hardware";
         private bool isRunning = false;
-        
+        private static bool _compilationHasErrors = false;
+
         // --- AutoResearch Metrics ---
         [System.Serializable]
         private class GenData
@@ -49,6 +53,17 @@ namespace UnityPerformanceAlchemist.Editor
         {
             apiKey = EditorPrefs.GetString("Alchemist_API_Key", "");
             localEndpoint = EditorPrefs.GetString("Alchemist_Local_Endpoint", "http://localhost:11434/v1/chat/completions");
+            CompilationPipeline.assemblyCompilationFinished += OnAssemblyCompilationFinished;
+        }
+
+        private void OnDisable()
+        {
+            CompilationPipeline.assemblyCompilationFinished -= OnAssemblyCompilationFinished;
+        }
+
+        private static void OnAssemblyCompilationFinished(string assemblyPath, CompilerMessage[] messages)
+        {
+            _compilationHasErrors = messages.Any(m => m.type == CompilerMessageType.Error);
         }
 
         private void OnGUI()
@@ -209,9 +224,10 @@ namespace UnityPerformanceAlchemist.Editor
                 File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), newCode);
                 AssetDatabase.Refresh();
                 
-                // --- [Safety Check] 컴파일 오류 감지 ---
-                await Task.Delay(5000); 
-                if (EditorUtility.scriptCompilationFailed)
+                // --- [Safety Check] 컴파일 오류 감지 (CompilationPipeline 이벤트 기반) ---
+                _compilationHasErrors = false;
+                await Task.Delay(5000);
+                if (_compilationHasErrors)
                 {
                     Log($"[Gen {gen}] ⚠️ 컴파일 에러! 즉시 롤백합니다.");
                     File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), bestCode);
@@ -325,22 +341,11 @@ namespace UnityPerformanceAlchemist.Editor
                     cleanJson = cleanJson.Substring(start, end - start).Trim();
                 }
 
-                string strategy = "Optimization Step";
-                string code = currentCode;
+                var obj = JObject.Parse(cleanJson);
+                string strategy = obj["strategy"]?.ToString() ?? "Optimization Step";
+                string code = obj["code"]?.ToString() ?? currentCode;
 
-                if (cleanJson.Contains("\"strategy\":")) {
-                    int sStart = cleanJson.IndexOf("\"strategy\":") + 12;
-                    int sEnd = cleanJson.IndexOf("\"", sStart);
-                    strategy = cleanJson.Substring(sStart, sEnd - sStart);
-                }
-                
-                if (cleanJson.Contains("\"code\":")) {
-                    int cStart = cleanJson.IndexOf("\"code\":") + 8;
-                    int cEnd = cleanJson.LastIndexOf("\"");
-                    code = cleanJson.Substring(cStart, cEnd - cStart).Replace("\\n", "\n").Replace("\\\"", "\"").Replace("\\t", "\t");
-                }
-
-                return (strategy, code);
+                return (strategy, string.IsNullOrEmpty(code) ? currentCode : code);
             }
             catch
             {
@@ -350,11 +355,16 @@ namespace UnityPerformanceAlchemist.Editor
 
         private async Task<string> PostToAI(string url, string prompt, bool isGemini)
         {
-            string payload = "";
-            if (isGemini) {
-                payload = $"{{\"contents\":[{{\"parts\":[{{\"text\":\"{prompt.Replace("\"", "\\\"").Replace("\n", "\\n")}\"}}]}}]}}";
-            } else {
-                payload = $"{{\"model\":\"{localModel}\",\"messages\":[{{\"role\":\"user\",\"content\":\"{prompt.Replace("\"", "\\\"").Replace("\n", "\\n")}\"}}],\"stream\":false}}";
+            string payload;
+            if (isGemini)
+            {
+                var geminiBody = new { contents = new[] { new { parts = new[] { new { text = prompt } } } } };
+                payload = JsonConvert.SerializeObject(geminiBody);
+            }
+            else
+            {
+                var ollamaBody = new { model = localModel, messages = new[] { new { role = "user", content = prompt } }, stream = false };
+                payload = JsonConvert.SerializeObject(ollamaBody);
             }
 
             using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
@@ -369,16 +379,11 @@ namespace UnityPerformanceAlchemist.Editor
 
                 if (request.result == UnityWebRequest.Result.Success)
                 {
-                    string text = request.downloadHandler.text;
-                    if (isGemini) {
-                        int start = text.IndexOf("\"text\": \"") + 9;
-                        int end = text.IndexOf("\"", start);
-                        return text.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
-                    } else {
-                        int start = text.IndexOf("\"content\":\"") + 11;
-                        int end = text.IndexOf("\"", start);
-                        return text.Substring(start, end - start).Replace("\\n", "\n").Replace("\\\"", "\"");
-                    }
+                    var root = JObject.Parse(request.downloadHandler.text);
+                    if (isGemini)
+                        return root["candidates"]?[0]?["content"]?["parts"]?[0]?["text"]?.ToString() ?? "";
+                    else
+                        return root["choices"]?[0]?["message"]?["content"]?.ToString() ?? "";
                 }
                 return "";
             }
