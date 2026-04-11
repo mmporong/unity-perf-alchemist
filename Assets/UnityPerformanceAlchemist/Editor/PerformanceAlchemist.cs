@@ -203,67 +203,173 @@ namespace UnityPerformanceAlchemist.Editor
 
             isRunning = true;
             researchHistory.Clear();
-            bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript));
-            
-            float baseFPS = await RunBenchmark();
-            initialFPS = baseFPS;
-            bestFPS = baseFPS;
-            researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true, code = bestCode });
-            await SyncToWeb();
 
-            for (int gen = 1; gen <= 10; gen++)
+            var state = new AlchemistFsmState
             {
-                if (!isRunning) break;
+                phase = AlchemistFsmState.Phase.Baseline,
+                generation = 1,
+                maxGenerations = 10,
+                bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript)),
+                targetScriptPath = AssetDatabase.GetAssetPath(targetScript),
+                optimizationGoal = optimizationGoal,
+                llmProvider = selectedProvider.ToString(),
+                apiKey = apiKey,
+                localEndpoint = localEndpoint,
+                localModel = localModel
+            };
+            state.Save();
 
-                Log($"[Gen {gen}] AI 가설 수립 중...");
-                var (strategy, newCode) = await RequestHypothesis(bestCode, bestFPS);
-                
-                if (string.IsNullOrEmpty(newCode)) continue;
+            await RunFsmAsync(state);
+        }
 
-                // 실험: 코드 적용
-                File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), newCode);
-                AssetDatabase.Refresh();
-                
-                // --- [Safety Check] 컴파일 오류 감지 (CompilationPipeline 이벤트 기반) ---
-                _compilationHasErrors = false;
-                await Task.Delay(5000);
-                if (_compilationHasErrors)
+        public async void ResumeAfterDomainReload(AlchemistFsmState state)
+        {
+            isRunning = true;
+            initialFPS = state.initialFPS;
+            bestFPS = state.bestFPS;
+            bestCode = state.bestCode;
+            optimizationGoal = state.optimizationGoal;
+            apiKey = state.apiKey;
+            localEndpoint = state.localEndpoint;
+            localModel = state.localModel;
+            if (System.Enum.TryParse<LLMProvider>(state.llmProvider, out var provider))
+                selectedProvider = provider;
+
+            researchHistory.Clear();
+            foreach (var dto in state.history)
+                researchHistory.Add(new GenData { generation = dto.generation, fps = dto.fps, strategy = dto.strategy, isAccepted = dto.isAccepted, code = "" });
+
+            Repaint();
+            await RunFsmAsync(state);
+        }
+
+        private async Task RunFsmAsync(AlchemistFsmState state)
+        {
+            while (isRunning && state.phase != AlchemistFsmState.Phase.Done)
+            {
+                switch (state.phase)
                 {
-                    Log($"[Gen {gen}] ⚠️ 컴파일 에러! 즉시 롤백합니다.");
-                    File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), bestCode);
-                    AssetDatabase.Refresh();
-                    await Task.Delay(3000);
-                    researchHistory.Add(new GenData { generation = gen, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false, code = "REJECTED_COMPILE_ERROR" });
-                    await SyncToWeb();
-                    continue;
+                    case AlchemistFsmState.Phase.Baseline:
+                    {
+                        Log("⏯️ 기준 성능 측정 중...");
+                        float baseFPS = await RunBenchmark();
+                        state.initialFPS = baseFPS;
+                        state.bestFPS = baseFPS;
+                        initialFPS = baseFPS;
+                        bestFPS = baseFPS;
+                        researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true, code = state.bestCode });
+                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true });
+                        state.phase = AlchemistFsmState.Phase.Hypothesis;
+                        state.Save();
+                        await SyncToWeb();
+                        break;
+                    }
+
+                    case AlchemistFsmState.Phase.Hypothesis:
+                    {
+                        if (state.generation > state.maxGenerations) { state.phase = AlchemistFsmState.Phase.Done; break; }
+
+                        Log($"[Gen {state.generation}] AI 가설 수립 중...");
+                        var (strategy, newCode) = await RequestHypothesis(state.bestCode, state.bestFPS);
+
+                        if (string.IsNullOrEmpty(newCode)) { state.generation++; state.Save(); break; }
+
+                        state.pendingStrategy = strategy;
+                        state.pendingCode = newCode;
+                        state.phase = AlchemistFsmState.Phase.WriteFile_Committed;
+                        state.Save();
+
+                        // TCS: 컴파일 실패 시에만 resolve (성공 → 도메인 리로드 → continuation 소멸)
+                        var compileTcs = new TaskCompletionSource<bool>();
+                        void onCompile(string path, CompilerMessage[] msgs)
+                        {
+                            CompilationPipeline.assemblyCompilationFinished -= onCompile;
+                            bool hasErr = msgs.Any(m => m.type == CompilerMessageType.Error);
+                            _compilationHasErrors = hasErr;
+                            compileTcs.TrySetResult(hasErr);
+                        }
+                        CompilationPipeline.assemblyCompilationFinished += onCompile;
+
+                        File.WriteAllText(state.targetScriptPath, newCode);
+                        AssetDatabase.Refresh();
+
+                        // 도메인 리로드 시 아래 코드에 도달하지 않음 → bootstrap이 재개
+                        await compileTcs.Task;
+                        CompilationPipeline.assemblyCompilationFinished -= onCompile;
+
+                        Log($"[Gen {state.generation}] ⚠️ 컴파일 에러! 즉시 롤백합니다.");
+                        File.WriteAllText(state.targetScriptPath, state.bestCode);
+                        AssetDatabase.Refresh();
+                        await Task.Delay(3000);
+
+                        researchHistory.Add(new GenData { generation = state.generation, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false, code = "REJECTED_COMPILE_ERROR" });
+                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = state.generation, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false });
+                        state.generation++;
+                        state.phase = state.generation > state.maxGenerations ? AlchemistFsmState.Phase.Done : AlchemistFsmState.Phase.Hypothesis;
+                        state.Save();
+                        await SyncToWeb();
+                        break;
+                    }
+
+                    case AlchemistFsmState.Phase.WriteFile_Committed:
+                        await Task.Delay(500);
+                        break;
+
+                    case AlchemistFsmState.Phase.Benchmark:
+                    {
+                        Log($"[Gen {state.generation}] 성능 검증 중 (Benchmark)...");
+                        float testFPS = await RunBenchmark();
+                        state.currentTestFPS = testFPS;
+                        state.phase = AlchemistFsmState.Phase.Decide;
+                        state.Save();
+                        break;
+                    }
+
+                    case AlchemistFsmState.Phase.Decide:
+                    {
+                        float testFPS = state.currentTestFPS;
+                        bool accepted = testFPS > state.bestFPS + 0.5f;
+
+                        if (accepted)
+                        {
+                            Log($"[Gen {state.generation}] ✨ 가설 채택! 성능 향상: {state.bestFPS:F1} → {testFPS:F1} FPS");
+                            state.bestFPS = testFPS;
+                            bestFPS = testFPS;
+                            state.bestCode = state.pendingCode;
+                            bestCode = state.pendingCode;
+                        }
+                        else
+                        {
+                            Log($"[Gen {state.generation}] ❌ 가설 기각. 성능: {testFPS:F1} FPS. 롤백합니다.");
+                        }
+
+                        researchHistory.Add(new GenData { generation = state.generation, fps = testFPS, strategy = state.pendingStrategy, isAccepted = accepted, code = accepted ? state.pendingCode : "Rejected." });
+                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = state.generation, fps = testFPS, strategy = state.pendingStrategy, isAccepted = accepted });
+
+                        state.generation++;
+                        state.phase = state.generation > state.maxGenerations ? AlchemistFsmState.Phase.Done : AlchemistFsmState.Phase.Hypothesis;
+                        state.Save();
+
+                        if (!accepted)
+                        {
+                            // 도메인 리로드 전 phase 저장 완료 → bootstrap이 올바른 phase로 재개
+                            File.WriteAllText(state.targetScriptPath, state.bestCode);
+                            AssetDatabase.Refresh();
+                            await Task.Delay(3000);
+                        }
+                        await SyncToWeb();
+                        break;
+                    }
                 }
 
-                Log($"[Gen {gen}] 성능 검증 중 (Benchmark)...");
-                float testFPS = await RunBenchmark();
-                
-                // 의사결정
-                bool accepted = testFPS > bestFPS + 0.5f; 
-                if (accepted)
-                {
-                    Log($"[Gen {gen}] ✨ 가설 채택! 성능 향상 확인: {bestFPS:F1} → {testFPS:F1} FPS");
-                    bestFPS = testFPS;
-                    bestCode = newCode;
-                }
-                else
-                {
-                    Log($"[Gen {gen}] ❌ 가설 기각. 성능 저하 또는 정체: {testFPS:F1} FPS. 롤백합니다.");
-                    File.WriteAllText(AssetDatabase.GetAssetPath(targetScript), bestCode);
-                    AssetDatabase.Refresh();
-                    await Task.Delay(3000);
-                }
-
-                researchHistory.Add(new GenData { generation = gen, fps = testFPS, strategy = strategy, isAccepted = accepted, code = (accepted ? newCode : "Rejected. Rolled back to previous best.") });
-                await SyncToWeb(); 
+                Repaint();
             }
 
             isRunning = false;
+            AlchemistFsmState.Delete();
             await SyncToWeb();
-            Log("🏁 Research Loop Finished.");
+            Log(state.phase == AlchemistFsmState.Phase.Done ? "🏁 Research Loop Finished." : "🛑 Research Loop Stopped.");
+            Repaint();
         }
 
         private async Task SyncToWeb()
