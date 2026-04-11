@@ -8,6 +8,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Linq;
+using Unity.Profiling;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -401,30 +402,50 @@ namespace UnityPerformanceAlchemist.Editor
 
         private async Task<float> RunBenchmark()
         {
-            Log("⏯️ Running Benchmark (Watchdog Enabled)...");
+            Log("⏯️ Running Benchmark (ProfilerRecorder, Watchdog Enabled)...");
             EditorApplication.isPlaying = true;
-            
+
             float startTime = (float)EditorApplication.timeSinceStartup;
-            float timeout = 15f; // 15초 타임아웃 (무한 루프 방지)
+            float timeout = 15f;
 
-            await Task.Delay(2000); 
+            await Task.Delay(2000); // 씬 초기화 대기
 
-            float totalDelta = 0;
+            var recorder = ProfilerRecorder.StartNew(ProfilerCategory.Internal, "Main Thread", 15);
             int frames = 60;
             for (int i = 0; i < frames; i++)
             {
                 if ((float)EditorApplication.timeSinceStartup - startTime > timeout)
                 {
                     Debug.LogError("[Alchemist] Benchmark Timeout! Rolling back.");
+                    recorder.Dispose();
                     EditorApplication.isPlaying = false;
                     return 0.1f;
                 }
-                totalDelta += Time.smoothDeltaTime;
                 await Task.Yield();
             }
 
+            float avgFrameMs = recorder.LastValue > 0 ? (float)(recorder.LastValue * 1e-6) : 16.67f;
+            recorder.Dispose();
             EditorApplication.isPlaying = false;
-            return frames / (totalDelta > 0 ? totalDelta : 1f);
+
+            float fps = 1000f / avgFrameMs;
+            SaveBenchmarkResults(fps, avgFrameMs);
+            return fps;
+        }
+
+        private void SaveBenchmarkResults(float fps, float frameMs)
+        {
+            Directory.CreateDirectory("Artifacts");
+            var result = new
+            {
+                timestamp = System.DateTime.UtcNow.ToString("o"),
+                fps = fps,
+                frameTimeMs = frameMs
+            };
+            File.WriteAllText(
+                Path.Combine("Artifacts", "benchmark_results.json"),
+                JsonConvert.SerializeObject(result, Formatting.Indented)
+            );
         }
 
         private async Task<(string strategy, string code)> RequestHypothesis(string currentCode, float currentFPS)
