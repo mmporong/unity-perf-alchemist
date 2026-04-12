@@ -30,7 +30,7 @@ namespace UnityPerformanceAlchemist.Editor
                 state.Save();
             }
 
-            var window = EditorWindow.GetWindow<PerformanceAlchemistWindow>("Alchemist Dashboard ");
+            var window = EditorWindow.GetWindow<PerformanceAlchemistWindow>("Alchemist Dashboard 🧪");
             window.ResumeAfterDomainReload(state);
         }
     }

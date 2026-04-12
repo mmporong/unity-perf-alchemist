@@ -1,0 +1,14 @@
+{
+  "name": "com.mmporong.unity-performance-alchemist",
+  "version": "0.1.0",
+  "displayName": "Unity Performance Alchemist",
+  "description": "Autonomous AI-driven performance optimization loop for Unity Editor.",
+  "unity": "2022.3",
+  "author": {
+    "name": "mmporong",
+    "url": "https://github.com/mmporong"
+  },
+  "dependencies": {
+    "com.unity.nuget.newtonsoft-json": "3.2.1"
+  }
+}
