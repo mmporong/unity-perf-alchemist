@@ -2,7 +2,6 @@ using UnityEngine;
 using UnityEditor;
 using UnityEngine.Networking;
 using UnityEditor.Compilation;
-using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -26,7 +25,6 @@ namespace UnityPerformanceAlchemist.Editor
         private MonoScript targetScript;
         private string optimizationGoal = "Maximize FPS on Mobile Hardware";
         private bool isRunning = false;
-        private static bool _compilationHasErrors = false;
 
         // --- AutoResearch Metrics ---
         [System.Serializable]
@@ -54,17 +52,6 @@ namespace UnityPerformanceAlchemist.Editor
         {
             apiKey = EditorPrefs.GetString("Alchemist_API_Key", "");
             localEndpoint = EditorPrefs.GetString("Alchemist_Local_Endpoint", "http://localhost:11434/v1/chat/completions");
-            CompilationPipeline.assemblyCompilationFinished += OnAssemblyCompilationFinished;
-        }
-
-        private void OnDisable()
-        {
-            CompilationPipeline.assemblyCompilationFinished -= OnAssemblyCompilationFinished;
-        }
-
-        private static void OnAssemblyCompilationFinished(string assemblyPath, CompilerMessage[] messages)
-        {
-            _compilationHasErrors = messages.Any(m => m.type == CompilerMessageType.Error);
         }
 
         private void OnGUI()
@@ -306,7 +293,6 @@ namespace UnityPerformanceAlchemist.Editor
                         {
                             if (msgs.Any(m => m.type == CompilerMessageType.Error))
                             {
-                                _compilationHasErrors = true;
                                 CompilationPipeline.assemblyCompilationFinished -= onCompile;
                                 compileTcs.TrySetResult(true);
                             }
@@ -410,7 +396,7 @@ namespace UnityPerformanceAlchemist.Editor
                 status = isRunning ? "Running" : "Finished"
             };
 
-            string json = Newtonsoft.Json.JsonConvert.SerializeObject(payload);
+            string json = JsonConvert.SerializeObject(payload);
             using (UnityWebRequest request = new UnityWebRequest(url, "POST"))
             {
                 byte[] bodyRaw = Encoding.UTF8.GetBytes(json);
