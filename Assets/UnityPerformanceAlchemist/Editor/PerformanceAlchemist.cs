@@ -471,38 +471,79 @@ namespace UnityPerformanceAlchemist.Editor
 
         private async Task<(string strategy, string code)> RequestHypothesis(string currentCode, float currentFPS)
         {
-            string prompt = $"Unity Performance Alchemist Mission:\nGoal: {optimizationGoal}\nCurrent FPS: {currentFPS:F1}\n\nTask:\nAnalyze the following C# code and propose ONE specific architectural optimization.\nProvide your response in JSON format:\n{{\n  \"strategy\": \"Short description of what you are changing\",\n  \"code\": \"Full refactored C# code\"\n}}\n\nCode:\n{currentCode}";
+            // Two-part format: simple JSON for strategy, csharp block for code
+            // Small models (llama3.2:1b) cannot reliably embed code inside JSON strings
+            string prompt =
+                $"Unity C# Performance Optimization\n" +
+                $"Goal: {optimizationGoal}\nCurrent FPS: {currentFPS:F1}\n\n" +
+                $"Propose ONE optimization for the code below.\n" +
+                $"Reply in EXACTLY this format:\n\n" +
+                $"STRATEGY:\n{{\"strategy\": \"one sentence description\"}}\n\n" +
+                $"CODE:\n```csharp\n// complete optimized C# file here\n```\n\n" +
+                $"Code to optimize:\n{currentCode}";
 
-            string responseJson = "";
+            string response = "";
             if (selectedProvider == LLMProvider.Gemini)
-                responseJson = await PostToAI($"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}", prompt, true);
+                response = await PostToAI($"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={apiKey}", prompt, true);
             else
-                responseJson = await PostToAI(localEndpoint, prompt, false);
+                response = await PostToAI(localEndpoint, prompt, false);
 
             try
             {
-                string cleanJson = responseJson.Trim();
-                if (cleanJson.Contains("```json"))
-                {
-                    int start = cleanJson.IndexOf("```json") + 7;
-                    int end = cleanJson.IndexOf("```", start);
-                    if (end > start) cleanJson = cleanJson.Substring(start, end - start).Trim();
-                }
-                else if (cleanJson.Contains("```"))
-                {
-                    int start = cleanJson.IndexOf("```") + 3;
-                    int end = cleanJson.IndexOf("```", start);
-                    if (end > start) cleanJson = cleanJson.Substring(start, end - start).Trim();
-                }
-                // Strip to first JSON object if extra prose follows
-                int braceStart = cleanJson.IndexOf('{');
-                int braceEnd = cleanJson.LastIndexOf('}');
-                if (braceStart >= 0 && braceEnd > braceStart)
-                    cleanJson = cleanJson.Substring(braceStart, braceEnd - braceStart + 1);
+                string strategy = "Optimization Step";
+                string code = currentCode;
 
-                var obj = JObject.Parse(cleanJson);
-                string strategy = obj["strategy"]?.ToString() ?? "Optimization Step";
-                string code = obj["code"]?.ToString() ?? currentCode;
+                // Extract strategy — try JSON first, fall back to first prose line
+                int strategyIdx = response.IndexOf("STRATEGY:");
+                if (strategyIdx >= 0)
+                {
+                    string afterStrategy = response.Substring(strategyIdx + 9).Trim();
+                    int codeMarker = afterStrategy.IndexOf("CODE:");
+                    string strategySection = codeMarker > 0 ? afterStrategy.Substring(0, codeMarker) : afterStrategy;
+                    int bs = strategySection.IndexOf('{');
+                    int be = strategySection.IndexOf('}');
+                    if (bs >= 0 && be > bs)
+                    {
+                        try
+                        {
+                            var obj = JObject.Parse(strategySection.Substring(bs, be - bs + 1));
+                            strategy = obj["strategy"]?.ToString() ?? strategy;
+                        }
+                        catch { /* fall through to plain text */ }
+                    }
+                    // Plain text fallback: first non-empty line of strategy section
+                    if (strategy == "Optimization Step")
+                    {
+                        foreach (string line in strategySection.Split('\n'))
+                        {
+                            string trimmed = line.Trim().TrimStart('{', '"').TrimEnd('}', '"');
+                            if (trimmed.Length > 10 && !trimmed.StartsWith("//"))
+                            {
+                                strategy = trimmed.Length > 120 ? trimmed.Substring(0, 120) : trimmed;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Extract code from ```csharp or ``` block
+                if (response.Contains("```csharp"))
+                {
+                    int start = response.IndexOf("```csharp") + 9;
+                    int end = response.IndexOf("```", start);
+                    if (end > start) code = response.Substring(start, end - start).Trim();
+                }
+                else if (response.Contains("CODE:"))
+                {
+                    int codeIdx = response.IndexOf("CODE:") + 5;
+                    string afterCode = response.Substring(codeIdx).Trim();
+                    if (afterCode.Contains("```"))
+                    {
+                        int start = afterCode.IndexOf("```") + 3;
+                        int end = afterCode.IndexOf("```", start);
+                        if (end > start) code = afterCode.Substring(start, end - start).Trim();
+                    }
+                }
 
                 return (strategy, string.IsNullOrEmpty(code) ? currentCode : code);
             }
