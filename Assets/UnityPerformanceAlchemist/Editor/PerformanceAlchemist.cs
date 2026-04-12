@@ -481,13 +481,24 @@ namespace UnityPerformanceAlchemist.Editor
 
             try
             {
-                string cleanJson = responseJson;
+                string cleanJson = responseJson.Trim();
                 if (cleanJson.Contains("```json"))
                 {
                     int start = cleanJson.IndexOf("```json") + 7;
-                    int end = cleanJson.LastIndexOf("```");
-                    cleanJson = cleanJson.Substring(start, end - start).Trim();
+                    int end = cleanJson.IndexOf("```", start);
+                    if (end > start) cleanJson = cleanJson.Substring(start, end - start).Trim();
                 }
+                else if (cleanJson.Contains("```"))
+                {
+                    int start = cleanJson.IndexOf("```") + 3;
+                    int end = cleanJson.IndexOf("```", start);
+                    if (end > start) cleanJson = cleanJson.Substring(start, end - start).Trim();
+                }
+                // Strip to first JSON object if extra prose follows
+                int braceStart = cleanJson.IndexOf('{');
+                int braceEnd = cleanJson.LastIndexOf('}');
+                if (braceStart >= 0 && braceEnd > braceStart)
+                    cleanJson = cleanJson.Substring(braceStart, braceEnd - braceStart + 1);
 
                 var obj = JObject.Parse(cleanJson);
                 string strategy = obj["strategy"]?.ToString() ?? "Optimization Step";
