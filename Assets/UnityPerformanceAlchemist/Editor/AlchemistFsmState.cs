@@ -6,11 +6,11 @@ namespace UnityPerformanceAlchemist.Editor
 {
     public class AlchemistFsmState
     {
-        public enum Phase { Idle, Baseline, Hypothesis, WriteFile_Committed, Benchmark, Decide, Done }
+        public enum Phase { Idle, ScanProject, Baseline, Hypothesis, WriteFile_Committed, Benchmark, Decide, Done }
 
         public Phase phase = Phase.Idle;
         public int generation = 1;
-        public int maxGenerations = 10;
+        public int maxGenerations = 5;
         public float initialFPS;
         public float bestFPS;
         public float currentTestFPS;
@@ -18,6 +18,9 @@ namespace UnityPerformanceAlchemist.Editor
         public string pendingCode = "";
         public string pendingStrategy = "";
         public string targetScriptPath = "";
+        public string scanRoot = "Assets";
+        public List<string> pendingScripts = new List<string>();
+        public int currentScriptIndex = 0;
         public string optimizationGoal = "";
         public string llmProvider = "Ollama_Local";
         [JsonIgnore] public string apiKey = ""; // EditorPrefs에서 직접 로드 — 파일에 평문 저장 금지
@@ -31,6 +34,7 @@ namespace UnityPerformanceAlchemist.Editor
             public float fps;
             public string strategy;
             public bool isAccepted;
+            public string scriptPath;
         }
 
         private const string StateDir = "ProjectSettings/Alchemist";

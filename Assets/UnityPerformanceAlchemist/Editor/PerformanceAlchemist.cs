@@ -7,6 +7,7 @@ using System.IO;
 using System.Text;
 using System.Threading.Tasks;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Unity.Profiling;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -22,9 +23,11 @@ namespace UnityPerformanceAlchemist.Editor
         private string localEndpoint = "http://localhost:11434/v1/chat/completions";
         private string localModel = "llama3.2:1b";
         
-        private MonoScript targetScript;
+        private string scanRoot = "Assets";
         private string optimizationGoal = "Maximize FPS on Mobile Hardware";
         private bool isRunning = false;
+        private int totalScripts = 0;
+        private int currentScriptDisplayIndex = 0;
 
         // --- AutoResearch Metrics ---
         [System.Serializable]
@@ -103,8 +106,18 @@ namespace UnityPerformanceAlchemist.Editor
                 if (GUI.changed) EditorPrefs.SetString("Alchemist_Local_Endpoint", localEndpoint);
             }
 
-            targetScript = (MonoScript)EditorGUILayout.ObjectField("Target Script", targetScript, typeof(MonoScript), false);
+            scanRoot = EditorGUILayout.TextField("Scan Root", scanRoot);
             optimizationGoal = EditorGUILayout.TextField("Goal", optimizationGoal);
+
+            if (isRunning && totalScripts > 0)
+            {
+                EditorGUILayout.Space(4);
+                EditorGUI.ProgressBar(
+                    EditorGUILayout.GetControlRect(false, 18),
+                    (float)currentScriptDisplayIndex / totalScripts,
+                    $"Script {currentScriptDisplayIndex + 1} / {totalScripts}"
+                );
+            }
 
             EditorGUILayout.Space();
 
@@ -187,25 +200,25 @@ namespace UnityPerformanceAlchemist.Editor
 
         private async void StartResearchLoop()
         {
-            if (targetScript == null) { Debug.LogError("Target script missing!"); return; }
             try
             {
                 isRunning = true;
+                totalScripts = 0;
+                currentScriptDisplayIndex = 0;
                 researchHistory.Clear();
 
                 var state = new AlchemistFsmState
                 {
-                    phase = AlchemistFsmState.Phase.Baseline,
+                    phase = AlchemistFsmState.Phase.ScanProject,
                     generation = 1,
-                    maxGenerations = 10,
-                    bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript)),
-                    targetScriptPath = AssetDatabase.GetAssetPath(targetScript),
+                    maxGenerations = 5,
+                    scanRoot = scanRoot,
                     optimizationGoal = optimizationGoal,
                     llmProvider = selectedProvider.ToString(),
                     localEndpoint = localEndpoint,
                     localModel = localModel
                 };
-                state.apiKey = apiKey; // JsonIgnore이므로 직접 할당 (직렬화 제외)
+                state.apiKey = apiKey;
                 state.Save();
 
                 await RunFsmAsync(state);
@@ -238,6 +251,8 @@ namespace UnityPerformanceAlchemist.Editor
                 researchHistory.Clear();
                 foreach (var dto in state.history)
                     researchHistory.Add(new GenData { generation = dto.generation, fps = dto.fps, strategy = dto.strategy, isAccepted = dto.isAccepted, code = "" });
+                totalScripts = state.pendingScripts.Count;
+                currentScriptDisplayIndex = state.currentScriptIndex;
 
                 Repaint();
                 await RunFsmAsync(state);
@@ -256,16 +271,38 @@ namespace UnityPerformanceAlchemist.Editor
             {
                 switch (state.phase)
                 {
+                    case AlchemistFsmState.Phase.ScanProject:
+                    {
+                        Log($"[Alchemist] 프로젝트 스캔 중: {state.scanRoot}");
+                        var scripts = ScanAndScoreScripts(state.scanRoot);
+                        if (scripts.Count == 0)
+                        {
+                            Log("⚠️ 최적화 대상 스크립트를 찾을 수 없습니다.");
+                            state.phase = AlchemistFsmState.Phase.Done;
+                            break;
+                        }
+                        state.pendingScripts = scripts;
+                        state.currentScriptIndex = 0;
+                        state.targetScriptPath = scripts[0];
+                        state.bestCode = File.ReadAllText(scripts[0]);
+                        totalScripts = scripts.Count;
+                        currentScriptDisplayIndex = 0;
+                        Log($"[Alchemist] {scripts.Count}개 스크립트 발견. 첫 대상: {Path.GetFileName(scripts[0])}");
+                        state.phase = AlchemistFsmState.Phase.Baseline;
+                        state.Save();
+                        break;
+                    }
+
                     case AlchemistFsmState.Phase.Baseline:
                     {
-                        Log("⏯️ 기준 성능 측정 중...");
+                        Log($"⏯️ [{Path.GetFileName(state.targetScriptPath)}] 기준 성능 측정 중...");
                         float baseFPS = await RunBenchmark();
                         state.initialFPS = baseFPS;
                         state.bestFPS = baseFPS;
                         initialFPS = baseFPS;
                         bestFPS = baseFPS;
-                        researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true, code = state.bestCode });
-                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = 0, fps = baseFPS, strategy = "Initial Baseline", isAccepted = true });
+                        researchHistory.Add(new GenData { generation = 0, fps = baseFPS, strategy = $"Baseline: {Path.GetFileName(state.targetScriptPath)}", isAccepted = true, code = state.bestCode });
+                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = 0, fps = baseFPS, strategy = $"Baseline: {Path.GetFileName(state.targetScriptPath)}", isAccepted = true, scriptPath = state.targetScriptPath });
                         state.phase = AlchemistFsmState.Phase.Hypothesis;
                         state.Save();
                         await SyncToWeb();
@@ -313,7 +350,7 @@ namespace UnityPerformanceAlchemist.Editor
                         await Task.Delay(3000);
 
                         researchHistory.Add(new GenData { generation = state.generation, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false, code = "REJECTED_COMPILE_ERROR" });
-                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = state.generation, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false });
+                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = state.generation, fps = 0, strategy = "FAILED: Compile Error", isAccepted = false, scriptPath = state.targetScriptPath });
                         state.generation++;
                         state.phase = state.generation > state.maxGenerations ? AlchemistFsmState.Phase.Done : AlchemistFsmState.Phase.Hypothesis;
                         state.Save();
@@ -354,10 +391,33 @@ namespace UnityPerformanceAlchemist.Editor
                         }
 
                         researchHistory.Add(new GenData { generation = state.generation, fps = testFPS, strategy = state.pendingStrategy, isAccepted = accepted, code = accepted ? state.pendingCode : "Rejected." });
-                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = state.generation, fps = testFPS, strategy = state.pendingStrategy, isAccepted = accepted });
+                        state.history.Add(new AlchemistFsmState.GenDataDto { generation = state.generation, fps = testFPS, strategy = state.pendingStrategy, isAccepted = accepted, scriptPath = state.targetScriptPath });
 
                         state.generation++;
-                        state.phase = state.generation > state.maxGenerations ? AlchemistFsmState.Phase.Done : AlchemistFsmState.Phase.Hypothesis;
+                        if (state.generation > state.maxGenerations)
+                        {
+                            state.currentScriptIndex++;
+                            if (state.currentScriptIndex < state.pendingScripts.Count)
+                            {
+                                string nextScript = state.pendingScripts[state.currentScriptIndex];
+                                Log($"[Alchemist] 다음 스크립트 ({state.currentScriptIndex + 1}/{state.pendingScripts.Count}): {Path.GetFileName(nextScript)}");
+                                state.targetScriptPath = nextScript;
+                                state.bestCode = File.ReadAllText(nextScript);
+                                state.generation = 1;
+                                state.initialFPS = 0;
+                                state.bestFPS = 0;
+                                currentScriptDisplayIndex = state.currentScriptIndex;
+                                state.phase = AlchemistFsmState.Phase.Baseline;
+                            }
+                            else
+                            {
+                                state.phase = AlchemistFsmState.Phase.Done;
+                            }
+                        }
+                        else
+                        {
+                            state.phase = AlchemistFsmState.Phase.Hypothesis;
+                        }
                         state.Save();
 
                         if (!accepted)
@@ -467,6 +527,47 @@ namespace UnityPerformanceAlchemist.Editor
                 Path.Combine("Artifacts", "benchmark_results.json"),
                 JsonConvert.SerializeObject(result, Formatting.Indented)
             );
+        }
+
+        private static List<string> ScanAndScoreScripts(string root)
+        {
+            var scored = new List<(string path, int score)>();
+            if (!Directory.Exists(root)) return new List<string>();
+
+            foreach (string path in Directory.GetFiles(root, "*.cs", SearchOption.AllDirectories))
+            {
+                string normalized = path.Replace('\\', '/');
+                // Editor 전용, 테스트, 자동생성, Alchemist 자신 제외
+                if (normalized.Contains("/Editor/")) continue;
+                if (normalized.Contains("/Tests/") || normalized.Contains("/Test/")) continue;
+                if (normalized.EndsWith(".g.cs") || normalized.EndsWith("Designer.cs")) continue;
+                if (normalized.Contains("UnityPerformanceAlchemist")) continue;
+
+                int score = ScoreScript(path);
+                if (score > 0) scored.Add((path, score));
+            }
+
+            scored.Sort((a, b) => b.score.CompareTo(a.score));
+            return scored.Select(s => s.path).ToList();
+        }
+
+        private static int ScoreScript(string path)
+        {
+            string content;
+            try { content = File.ReadAllText(path); } catch { return 0; }
+
+            int score = 0;
+            score += Regex.Matches(content, @"\bvoid\s+Update\s*\(").Count * 4;
+            score += Regex.Matches(content, @"\bvoid\s+FixedUpdate\s*\(").Count * 3;
+            score += Regex.Matches(content, @"\bvoid\s+LateUpdate\s*\(").Count * 2;
+            score += Regex.Matches(content, @"\bfor\s*\(").Count * 2;
+            score += Regex.Matches(content, @"\bforeach\s*\(").Count * 2;
+            score += Regex.Matches(content, @"\bGetComponent\s*[<(]").Count * 3;
+            score += Regex.Matches(content, @"\bFindObjectOfType\b").Count * 4;
+            score += Regex.Matches(content, @"\bInstantiate\s*\(").Count * 3;
+            score += Regex.Matches(content, @"\bDestroy\s*\(").Count * 2;
+            score += Regex.Matches(content, @"\bnew\s+\w").Count;
+            return score;
         }
 
         private async Task<(string strategy, string code)> RequestHypothesis(string currentCode, float currentFPS)
