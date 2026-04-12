@@ -446,7 +446,7 @@ namespace UnityPerformanceAlchemist.Editor
         {
             string url = "http://localhost:3848/api/update";
             float improvement = initialFPS > 0 ? ((bestFPS - initialFPS) / initialFPS) * 100f : 0;
-            
+
             var payload = new
             {
                 initialFPS = initialFPS,
@@ -463,6 +463,7 @@ namespace UnityPerformanceAlchemist.Editor
                 request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json");
+                request.timeout = 3; // 웹 대시보드 미실행 시 빠른 실패 처리
 
                 var operation = request.SendWebRequest();
                 while (!operation.isDone) await Task.Yield();
