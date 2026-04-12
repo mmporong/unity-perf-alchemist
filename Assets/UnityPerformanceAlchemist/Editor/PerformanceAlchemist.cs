@@ -542,6 +542,11 @@ namespace UnityPerformanceAlchemist.Editor
                 if (normalized.Contains("/Tests/") || normalized.Contains("/Test/")) continue;
                 if (normalized.EndsWith(".g.cs") || normalized.EndsWith("Designer.cs")) continue;
                 if (normalized.Contains("UnityPerformanceAlchemist")) continue;
+                if (normalized.Contains("/TextMesh Pro/")) continue;
+                if (normalized.Contains("/Plugins/")) continue;
+                if (normalized.Contains("/GoogleMobileAds/")) continue;
+                if (normalized.Contains("/PackageCache/")) continue;
+                if (normalized.Contains("/Examples")) continue;
 
                 int score = ScoreScript(path);
                 if (score > 0) scored.Add((path, score));
