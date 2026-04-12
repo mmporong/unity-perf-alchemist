@@ -670,7 +670,7 @@ namespace UnityPerformanceAlchemist.Editor
             }
             else
             {
-                var ollamaBody = new { model = localModel, messages = new[] { new { role = "user", content = prompt } }, stream = false };
+                var ollamaBody = new { model = localModel, messages = new[] { new { role = "user", content = prompt } }, max_tokens = 600, stream = false };
                 payload = JsonConvert.SerializeObject(ollamaBody);
             }
 
