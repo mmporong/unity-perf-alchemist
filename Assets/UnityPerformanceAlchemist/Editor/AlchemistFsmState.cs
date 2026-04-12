@@ -20,7 +20,7 @@ namespace UnityPerformanceAlchemist.Editor
         public string targetScriptPath = "";
         public string optimizationGoal = "";
         public string llmProvider = "Ollama_Local";
-        public string apiKey = "";
+        [JsonIgnore] public string apiKey = ""; // EditorPrefs에서 직접 로드 — 파일에 평문 저장 금지
         public string localEndpoint = "http://localhost:11434/v1/chat/completions";
         public string localModel = "llama3.2:1b";
         public List<GenDataDto> history = new List<GenDataDto>();

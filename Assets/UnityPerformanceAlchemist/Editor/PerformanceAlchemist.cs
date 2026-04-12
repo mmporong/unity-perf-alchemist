@@ -201,47 +201,66 @@ namespace UnityPerformanceAlchemist.Editor
         private async void StartResearchLoop()
         {
             if (targetScript == null) { Debug.LogError("Target script missing!"); return; }
-
-            isRunning = true;
-            researchHistory.Clear();
-
-            var state = new AlchemistFsmState
+            try
             {
-                phase = AlchemistFsmState.Phase.Baseline,
-                generation = 1,
-                maxGenerations = 10,
-                bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript)),
-                targetScriptPath = AssetDatabase.GetAssetPath(targetScript),
-                optimizationGoal = optimizationGoal,
-                llmProvider = selectedProvider.ToString(),
-                apiKey = apiKey,
-                localEndpoint = localEndpoint,
-                localModel = localModel
-            };
-            state.Save();
+                isRunning = true;
+                researchHistory.Clear();
 
-            await RunFsmAsync(state);
+                var state = new AlchemistFsmState
+                {
+                    phase = AlchemistFsmState.Phase.Baseline,
+                    generation = 1,
+                    maxGenerations = 10,
+                    bestCode = File.ReadAllText(AssetDatabase.GetAssetPath(targetScript)),
+                    targetScriptPath = AssetDatabase.GetAssetPath(targetScript),
+                    optimizationGoal = optimizationGoal,
+                    llmProvider = selectedProvider.ToString(),
+                    localEndpoint = localEndpoint,
+                    localModel = localModel
+                };
+                state.apiKey = apiKey; // JsonIgnore이므로 직접 할당 (직렬화 제외)
+                state.Save();
+
+                await RunFsmAsync(state);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[Alchemist] StartResearchLoop 예외: {e}");
+                isRunning = false;
+                AlchemistFsmState.Delete();
+            }
         }
 
         public async void ResumeAfterDomainReload(AlchemistFsmState state)
         {
-            isRunning = true;
-            initialFPS = state.initialFPS;
-            bestFPS = state.bestFPS;
-            bestCode = state.bestCode;
-            optimizationGoal = state.optimizationGoal;
-            apiKey = state.apiKey;
-            localEndpoint = state.localEndpoint;
-            localModel = state.localModel;
-            if (System.Enum.TryParse<LLMProvider>(state.llmProvider, out var provider))
-                selectedProvider = provider;
+            try
+            {
+                isRunning = true;
+                initialFPS = state.initialFPS;
+                bestFPS = state.bestFPS;
+                bestCode = state.bestCode;
+                optimizationGoal = state.optimizationGoal;
+                // apiKey는 JsonIgnore — EditorPrefs에서 복원
+                apiKey = EditorPrefs.GetString("Alchemist_API_Key", "");
+                state.apiKey = apiKey;
+                localEndpoint = state.localEndpoint;
+                localModel = state.localModel;
+                if (System.Enum.TryParse<LLMProvider>(state.llmProvider, out var provider))
+                    selectedProvider = provider;
 
-            researchHistory.Clear();
-            foreach (var dto in state.history)
-                researchHistory.Add(new GenData { generation = dto.generation, fps = dto.fps, strategy = dto.strategy, isAccepted = dto.isAccepted, code = "" });
+                researchHistory.Clear();
+                foreach (var dto in state.history)
+                    researchHistory.Add(new GenData { generation = dto.generation, fps = dto.fps, strategy = dto.strategy, isAccepted = dto.isAccepted, code = "" });
 
-            Repaint();
-            await RunFsmAsync(state);
+                Repaint();
+                await RunFsmAsync(state);
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogError($"[Alchemist] ResumeAfterDomainReload 예외: {e}");
+                isRunning = false;
+                AlchemistFsmState.Delete();
+            }
         }
 
         private async Task RunFsmAsync(AlchemistFsmState state)
@@ -280,21 +299,25 @@ namespace UnityPerformanceAlchemist.Editor
                         state.phase = AlchemistFsmState.Phase.WriteFile_Committed;
                         state.Save();
 
-                        // TCS: 컴파일 실패 시에만 resolve (성공 → 도메인 리로드 → continuation 소멸)
+                        // TCS: 어셈블리에서 에러 발견 시에만 resolve
+                        // 컴파일 성공 → 도메인 리로드 → continuation 소멸 → bootstrap이 재개
                         var compileTcs = new TaskCompletionSource<bool>();
                         void onCompile(string path, CompilerMessage[] msgs)
                         {
-                            CompilationPipeline.assemblyCompilationFinished -= onCompile;
-                            bool hasErr = msgs.Any(m => m.type == CompilerMessageType.Error);
-                            _compilationHasErrors = hasErr;
-                            compileTcs.TrySetResult(hasErr);
+                            if (msgs.Any(m => m.type == CompilerMessageType.Error))
+                            {
+                                _compilationHasErrors = true;
+                                CompilationPipeline.assemblyCompilationFinished -= onCompile;
+                                compileTcs.TrySetResult(true);
+                            }
+                            // 에러 없으면 resolve 안 함 → 도메인 리로드가 continuation을 소멸시킴
                         }
                         CompilationPipeline.assemblyCompilationFinished += onCompile;
 
                         File.WriteAllText(state.targetScriptPath, newCode);
                         AssetDatabase.Refresh();
 
-                        // 도메인 리로드 시 아래 코드에 도달하지 않음 → bootstrap이 재개
+                        // 에러 발생 시에만 아래로 도달 (성공 시 도메인 리로드로 소멸)
                         await compileTcs.Task;
                         CompilationPipeline.assemblyCompilationFinished -= onCompile;
 
@@ -424,11 +447,23 @@ namespace UnityPerformanceAlchemist.Editor
                 await Task.Yield();
             }
 
-            float avgFrameMs = recorder.LastValue > 0 ? (float)(recorder.LastValue * 1e-6) : 16.67f;
+            int sampleCount = recorder.Count;
+            float avgFrameMs;
+            if (sampleCount > 0)
+            {
+                double totalNs = 0;
+                for (int i = 0; i < sampleCount; i++)
+                    totalNs += recorder.GetSample(i).Value;
+                avgFrameMs = (float)(totalNs / sampleCount * 1e-6);
+            }
+            else
+            {
+                avgFrameMs = 16.67f;
+            }
             recorder.Dispose();
             EditorApplication.isPlaying = false;
 
-            float fps = 1000f / avgFrameMs;
+            float fps = avgFrameMs > 0 ? 1000f / avgFrameMs : 0.1f;
             SaveBenchmarkResults(fps, avgFrameMs);
             return fps;
         }
