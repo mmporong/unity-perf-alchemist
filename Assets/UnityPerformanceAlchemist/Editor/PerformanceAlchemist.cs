@@ -586,7 +586,7 @@ namespace UnityPerformanceAlchemist.Editor
                 $"Reply in EXACTLY this format:\n\n" +
                 $"STRATEGY:\n{{\"strategy\": \"one sentence description\"}}\n\n" +
                 $"CODE:\n```csharp\n// complete optimized C# file here\n```\n\n" +
-                $"Code to optimize:\n{currentCode}";
+                $"Code to optimize:\n{(currentCode.Length > 3000 ? currentCode.Substring(0, 3000) + "\n// ... (truncated)" : currentCode)}";
 
             string response = "";
             if (selectedProvider == LLMProvider.Gemini)
@@ -679,6 +679,7 @@ namespace UnityPerformanceAlchemist.Editor
                 request.uploadHandler = new UploadHandlerRaw(bodyRaw);
                 request.downloadHandler = new DownloadHandlerBuffer();
                 request.SetRequestHeader("Content-Type", "application/json");
+                request.timeout = 120; // 2분 타임아웃 (소형 모델 긴 응답 대비)
 
                 var operation = request.SendWebRequest();
                 while (!operation.isDone) await Task.Yield();
