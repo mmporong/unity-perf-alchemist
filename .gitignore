@@ -9,6 +9,7 @@ UserSettings/
 
 # Unity project files (IDE 재생성)
 *.csproj
+!ci/*.csproj
 *.sln
 *.unityproj
 *.user
@@ -25,4 +26,7 @@ node_modules/
 *.log
 
 # Alchemist artifacts
-# Artifacts/ 는 gitignore 제외 (benchmark_results.json 버전 관리 대상)
+Artifacts/
+
+# OMC state
+.omc/

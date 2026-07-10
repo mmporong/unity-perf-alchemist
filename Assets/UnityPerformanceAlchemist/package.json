@@ -1,8 +1,8 @@
 {
   "name": "com.mmporong.unity-performance-alchemist",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "displayName": "Unity Performance Alchemist",
-  "description": "Autonomous AI-driven performance optimization loop for Unity Editor.",
+  "description": "Settings-level autonomous performance research loop for Unity Editor: statistical adoption gates (Mann-Whitney U + Cliff's delta), OFAT/factorial experiments, and per-device-tier config derivation.",
   "unity": "2022.3",
   "author": {
     "name": "mmporong",
